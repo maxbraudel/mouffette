@@ -154,9 +154,13 @@ void ScreenCanvas::setScreens(const QList<ScreenInfo>& screens) {
     
     // Fit all screens in view
     if (!m_screens.isEmpty()) {
-        QRectF sceneRect = calculateSceneRect();
+        // Set a very large scene rect to allow free movement
+        const double LARGE_SCENE_SIZE = 100000.0;
+        QRectF sceneRect(-LARGE_SCENE_SIZE/2, -LARGE_SCENE_SIZE/2, LARGE_SCENE_SIZE, LARGE_SCENE_SIZE);
         m_scene->setSceneRect(sceneRect);
-        fitInView(sceneRect, Qt::KeepAspectRatio);
+        
+        // Don't auto-fit, let user control the view
+        // fitInView(sceneRect, Qt::KeepAspectRatio);
     }
 }
 
@@ -217,34 +221,6 @@ QGraphicsRectItem* ScreenCanvas::createScreenItem(const ScreenInfo& screen, int 
     label->setParentItem(item);
     
     return item;
-}
-
-QRectF ScreenCanvas::calculateSceneRect() const {
-    if (m_screens.isEmpty()) {
-        return QRectF(0, 0, 800, 600);
-    }
-    
-    const double SCALE_FACTOR = 0.2;
-    const double MARGIN = 50;
-    const double SCREEN_SPACING = 5.0;
-    
-    // Calculate compact positioning
-    QMap<int, QRectF> compactPositions = calculateCompactPositions(SCALE_FACTOR, SCREEN_SPACING);
-    
-    // Find bounding box of compact layout
-    if (compactPositions.isEmpty()) {
-        return QRectF(0, 0, 800, 600);
-    }
-    
-    QRectF boundingBox = compactPositions.first();
-    for (const QRectF& rect : compactPositions) {
-        boundingBox = boundingBox.united(rect);
-    }
-    
-    // Add margin
-    boundingBox.adjust(-MARGIN, -MARGIN, MARGIN, MARGIN);
-    
-    return boundingBox;
 }
 
 QMap<int, QRectF> ScreenCanvas::calculateCompactPositions(double scaleFactor, double spacing) const {

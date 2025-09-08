@@ -58,7 +58,6 @@ private:
     
     void createScreenItems();
     QGraphicsRectItem* createScreenItem(const ScreenInfo& screen, int index, const QRectF& position);
-    QRectF calculateSceneRect() const;
     QMap<int, QRectF> calculateCompactPositions(double scaleFactor, double spacing) const;
 };
 
