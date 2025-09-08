@@ -191,7 +191,7 @@ void ScreenCanvas::setScreens(const QList<ScreenInfo>& screens) {
     QRectF sceneRect(-LARGE_SCENE_SIZE/2, -LARGE_SCENE_SIZE/2, LARGE_SCENE_SIZE, LARGE_SCENE_SIZE);
     m_scene->setSceneRect(sceneRect);
     if (!m_screens.isEmpty()) {
-        recenterWithMargin(33);
+        recenterWithMargin(53);
     }
 }
 
@@ -339,7 +339,7 @@ void ScreenCanvas::recenterWithMargin(int marginPx) {
 
 void ScreenCanvas::keyPressEvent(QKeyEvent* event) {
     if (event->key() == Qt::Key_Space) {
-        recenterWithMargin(33);
+        recenterWithMargin(53);
         event->accept();
         return;
     }
@@ -408,6 +408,28 @@ void ScreenCanvas::mouseReleaseEvent(QMouseEvent* event) {
         setCursor(Qt::ArrowCursor);
     }
     QGraphicsView::mouseReleaseEvent(event);
+}
+
+void ScreenCanvas::wheelEvent(QWheelEvent* event) {
+    // Prefer pixelDelta for trackpads (gives smooth 2D vector),
+    // fallback to angleDelta for traditional mouse wheels.
+    QPoint numPixels = event->pixelDelta();
+    QPoint numDegrees = event->angleDelta();
+    QPoint delta;
+    if (!numPixels.isNull()) {
+        delta = numPixels; // already in pixels, both axes
+    } else if (!numDegrees.isNull()) {
+        // angleDelta is in eighths of a degree; scale to pixels
+        delta = numDegrees / 8; // small scaling for smoother feel
+    }
+
+    if (!delta.isNull()) {
+        horizontalScrollBar()->setValue(horizontalScrollBar()->value() - delta.x());
+        verticalScrollBar()->setValue(verticalScrollBar()->value() - delta.y());
+        event->accept();
+        return;
+    }
+    QGraphicsView::wheelEvent(event);
 }
 
 MainWindow::~MainWindow() {

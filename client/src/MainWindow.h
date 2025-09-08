@@ -17,6 +17,7 @@
 #include <QWidget>
 #include <QEvent>
 #include <QMouseEvent>
+#include <QWheelEvent>
 #include <QMessageBox>
 #include <QGraphicsView>
 #include <QGraphicsScene>
@@ -53,6 +54,7 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void wheelEvent(QWheelEvent* event) override;
 
 private:
     QGraphicsScene* m_scene;
