@@ -145,6 +145,12 @@ ScreenCanvas::ScreenCanvas(QWidget* parent)
     
     // Enable mouse tracking for panning
     setMouseTracking(true);
+    
+    // Enable native gesture support on macOS
+#ifdef Q_OS_MACOS
+    setAttribute(Qt::WA_AcceptTouchEvents, true);
+    viewport()->setAttribute(Qt::WA_AcceptTouchEvents, true);
+#endif
 }
 
 void ScreenCanvas::setScreens(const QList<ScreenInfo>& screens) {
@@ -170,44 +176,143 @@ void ScreenCanvas::clearScreens() {
 }
 
 void ScreenCanvas::createScreenItems() {
-    const double SCALE_FACTOR = 0.2; // Scale down screens to 20% of their actual size
+    const double SCALE_FACTOR = 0.2;
+    const double MIN_GAP = 2.0; // Minimal gap between screens
+    
+    // Create a compact layout by arranging screens with minimal gaps
+    QList<QRectF> compactRects;
     
     for (int i = 0; i < m_screens.size(); ++i) {
         const ScreenInfo& screen = m_screens[i];
-        QGraphicsRectItem* screenItem = createScreenItem(screen, i);
-        m_screenItems.append(screenItem);
-        m_scene->addItem(screenItem);
+        
+        QRectF newRect(0, 0, screen.width * SCALE_FACTOR, screen.height * SCALE_FACTOR);
+        
+        if (i == 0) {
+            // First screen at origin
+            newRect.moveTo(0, 0);
+        } else {
+            // Position subsequent screens adjacent to existing ones
+            bool positioned = false;
+            
+            // Try to find the best position next to existing screens
+            for (int j = 0; j < i; j++) {
+                const ScreenInfo& existingScreen = m_screens[j];
+                const QRectF& existingRect = compactRects[j];
+                
+                // Check if screens should be horizontally adjacent
+                if (qAbs(screen.y - existingScreen.y) < 100) { // Same horizontal level
+                    // Try to place to the right
+                    QRectF testRect = newRect;
+                    testRect.moveTo(existingRect.right() + MIN_GAP, existingRect.y());
+                    
+                    // Check if this position conflicts with other screens
+                    bool conflicts = false;
+                    for (int k = 0; k < i; k++) {
+                        if (k != j && testRect.intersects(compactRects[k].adjusted(-MIN_GAP/2, -MIN_GAP/2, MIN_GAP/2, MIN_GAP/2))) {
+                            conflicts = true;
+                            break;
+                        }
+                    }
+                    
+                    if (!conflicts) {
+                        newRect = testRect;
+                        positioned = true;
+                        break;
+                    }
+                }
+                
+                // Check if screens should be vertically adjacent
+                if (qAbs(screen.x - existingScreen.x) < 100) { // Same vertical column
+                    // Try to place below
+                    QRectF testRect = newRect;
+                    testRect.moveTo(existingRect.x(), existingRect.bottom() + MIN_GAP);
+                    
+                    // Check if this position conflicts with other screens
+                    bool conflicts = false;
+                    for (int k = 0; k < i; k++) {
+                        if (k != j && testRect.intersects(compactRects[k].adjusted(-MIN_GAP/2, -MIN_GAP/2, MIN_GAP/2, MIN_GAP/2))) {
+                            conflicts = true;
+                            break;
+                        }
+                    }
+                    
+                    if (!conflicts) {
+                        newRect = testRect;
+                        positioned = true;
+                        break;
+                    }
+                }
+            }
+            
+            if (!positioned) {
+                // If no good adjacent position found, place it in a grid-like arrangement
+                double x = (i % 2) * (300 * SCALE_FACTOR + MIN_GAP);
+                double y = (i / 2) * (200 * SCALE_FACTOR + MIN_GAP);
+                newRect.moveTo(x, y);
+            }
+        }
+        
+        compactRects.append(newRect);
+        
+        // Create the graphics item
+        QGraphicsRectItem* item = new QGraphicsRectItem(newRect);
+        
+        // Set appearance
+        if (screen.primary) {
+            item->setBrush(QBrush(QColor(74, 144, 226, 180))); // Primary screen - blue
+            item->setPen(QPen(QColor(74, 144, 226), 3));
+        } else {
+            item->setBrush(QBrush(QColor(80, 80, 80, 180))); // Secondary screen - gray
+            item->setPen(QPen(QColor(160, 160, 160), 2));
+        }
+        
+        // Store screen index for click handling
+        item->setData(0, i);
+        
+        // Add screen label
+        QGraphicsTextItem* label = new QGraphicsTextItem(QString("Screen %1\n%2×%3")
+            .arg(i + 1)
+            .arg(screen.width)
+            .arg(screen.height));
+        label->setDefaultTextColor(Qt::white);
+        label->setFont(QFont("Arial", 12, QFont::Bold));
+        
+        // Center the label on the screen
+        QRectF labelRect = label->boundingRect();
+        QRectF screenRect = item->rect();
+        label->setPos(screenRect.center() - labelRect.center());
+        label->setParentItem(item);
+        
+        m_screenItems.append(item);
+        m_scene->addItem(item);
     }
 }
 
 QGraphicsRectItem* ScreenCanvas::createScreenItem(const ScreenInfo& screen, int index) {
     const double SCALE_FACTOR = 0.2;
-    const double SCREEN_GAP = 3.0; // Small visual gap between adjacent screens
     
-    // Calculate position with minimal gaps for adjacent screens
+    // Calculate position - for adjacent screens, minimize the gaps
     double posX = screen.x * SCALE_FACTOR;
     double posY = screen.y * SCALE_FACTOR;
     
-    // For adjacent screens, minimize the gap
+    // Find the minimum gap between this screen and others
     if (index > 0) {
         for (int i = 0; i < index; i++) {
             const ScreenInfo& otherScreen = m_screens[i];
             
-            // Check if screens are horizontally adjacent (side by side)
-            if (qAbs(screen.y - otherScreen.y) <= 50) { // Same row (within 50px tolerance)
-                if (screen.x == otherScreen.x + otherScreen.width) { // Right of other screen
-                    posX = (otherScreen.x + otherScreen.width) * SCALE_FACTOR + SCREEN_GAP;
-                } else if (otherScreen.x == screen.x + screen.width) { // Left of other screen
-                    // Other screen positioning will handle this
+            // Check for horizontal adjacency (screens side by side)
+            if (qAbs(screen.y - otherScreen.y) < 100) { // Same row within tolerance
+                if (screen.x == otherScreen.x + otherScreen.width) {
+                    // This screen is immediately to the right - minimize gap
+                    posX = (otherScreen.x + otherScreen.width) * SCALE_FACTOR + 2.0;
                 }
             }
             
-            // Check if screens are vertically adjacent (stacked)
-            if (qAbs(screen.x - otherScreen.x) <= 50) { // Same column (within 50px tolerance)
-                if (screen.y == otherScreen.y + otherScreen.height) { // Below other screen
-                    posY = (otherScreen.y + otherScreen.height) * SCALE_FACTOR + SCREEN_GAP;
-                } else if (otherScreen.y == screen.y + screen.height) { // Above other screen
-                    // Other screen positioning will handle this
+            // Check for vertical adjacency (screens stacked)
+            if (qAbs(screen.x - otherScreen.x) < 100) { // Same column within tolerance
+                if (screen.y == otherScreen.y + otherScreen.height) {
+                    // This screen is immediately below - minimize gap
+                    posY = (otherScreen.y + otherScreen.height) * SCALE_FACTOR + 2.0;
                 }
             }
         }
@@ -278,32 +383,66 @@ QRectF ScreenCanvas::calculateSceneRect() const {
 }
 
 void ScreenCanvas::wheelEvent(QWheelEvent* event) {
-    // Handle both mouse wheel and trackpad gestures
-    if (event->angleDelta().isNull()) {
-        QGraphicsView::wheelEvent(event);
-        return;
-    }
-    
+    // Handle trackpad pinch gestures and mouse wheel
     const double scaleFactor = 1.15;
-    const QPointF centerPoint = mapToScene(event->position().toPoint());
     
-    if (event->angleDelta().y() > 0) {
-        // Zoom in
-        if (m_currentZoom < MAX_ZOOM) {
-            scale(scaleFactor, scaleFactor);
-            m_currentZoom *= scaleFactor;
+    // Check if this is a pinch gesture (trackpad) or regular scroll
+    Qt::ScrollPhase phase = event->phase();
+    QPoint pixelDelta = event->pixelDelta();
+    QPoint angleDelta = event->angleDelta();
+    
+    // For trackpad pinch gestures, we typically get pixelDelta
+    if (!pixelDelta.isNull() && (phase == Qt::ScrollBegin || phase == Qt::ScrollUpdate || phase == Qt::ScrollEnd)) {
+        // This is likely a trackpad gesture
+        // Use pixelDelta for more precise control
+        double deltaY = pixelDelta.y();
+        
+        if (qAbs(deltaY) > 1) { // Threshold to avoid jitter
+            const QPointF centerPoint = mapToScene(event->position().toPoint());
+            
+            if (deltaY > 0) {
+                // Zoom in
+                if (m_currentZoom < MAX_ZOOM) {
+                    double factor = 1.0 + (deltaY * 0.01); // More gradual zoom
+                    scale(factor, factor);
+                    m_currentZoom *= factor;
+                }
+            } else {
+                // Zoom out
+                if (m_currentZoom > MIN_ZOOM) {
+                    double factor = 1.0 / (1.0 + (qAbs(deltaY) * 0.01));
+                    scale(factor, factor);
+                    m_currentZoom *= factor;
+                }
+            }
+            
+            // Center zoom around the cursor position
+            centerOn(centerPoint);
+            constrainView();
         }
-    } else {
-        // Zoom out
-        if (m_currentZoom > MIN_ZOOM) {
-            scale(1.0 / scaleFactor, 1.0 / scaleFactor);
-            m_currentZoom /= scaleFactor;
+    } else if (!angleDelta.isNull()) {
+        // This is likely a mouse wheel
+        const QPointF centerPoint = mapToScene(event->position().toPoint());
+        
+        if (angleDelta.y() > 0) {
+            // Zoom in
+            if (m_currentZoom < MAX_ZOOM) {
+                scale(scaleFactor, scaleFactor);
+                m_currentZoom *= scaleFactor;
+            }
+        } else {
+            // Zoom out
+            if (m_currentZoom > MIN_ZOOM) {
+                scale(1.0 / scaleFactor, 1.0 / scaleFactor);
+                m_currentZoom /= scaleFactor;
+            }
         }
+        
+        // Center zoom around the cursor position
+        centerOn(centerPoint);
+        constrainView();
     }
     
-    // Center zoom around the cursor position
-    centerOn(centerPoint);
-    constrainView();
     event->accept();
 }
 
