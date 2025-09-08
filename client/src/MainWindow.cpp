@@ -11,6 +11,7 @@
 #include <cmath>
 #include <QDialog>
 #include <QLineEdit>
+#include <QFrame>
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -129,6 +130,8 @@ void MainWindow::showScreenView(const ClientInfo& client) {
     
     // Switch to screen view page
     m_stackedWidget->setCurrentWidget(m_screenViewWidget);
+    // Show back button when on screen view
+    if (m_backButton) m_backButton->show();
     // Move focus to canvas and recenter with margin
     if (m_screenCanvas) {
         m_screenCanvas->setFocus(Qt::OtherFocusReason);
@@ -153,6 +156,8 @@ void MainWindow::showClientListView() {
     
     // Switch to client list page
     m_stackedWidget->setCurrentWidget(m_clientListPage);
+    // Hide back button when on client list
+    if (m_backButton) m_backButton->hide();
     
     qDebug() << "Client list view now showing. Current widget index:" << m_stackedWidget->currentIndex();
     
@@ -531,6 +536,15 @@ void MainWindow::setupUI() {
     // Connection section (always visible)
     m_connectionLayout = new QHBoxLayout();
     
+    // Back button (left-aligned, initially hidden)
+    m_backButton = new QPushButton("← Back to Client List");
+    m_backButton->setStyleSheet("QPushButton { padding: 8px 16px; font-weight: bold; }");
+    m_backButton->setAutoDefault(false);
+    m_backButton->setDefault(false);
+    m_backButton->setFocusPolicy(Qt::NoFocus);
+    m_backButton->hide(); // Initially hidden, shown only on screen view
+    connect(m_backButton, &QPushButton::clicked, this, &MainWindow::onBackToClientListClicked);
+    
     // Status label (no "Status:")
     m_connectionStatusLabel = new QLabel("DISCONNECTED");
     m_connectionStatusLabel->setStyleSheet("QLabel { color: red; font-weight: bold; }");
@@ -546,13 +560,21 @@ void MainWindow::setupUI() {
     m_settingsButton->setStyleSheet("QPushButton { padding: 8px 16px; font-weight: bold; }");
     connect(m_settingsButton, &QPushButton::clicked, this, &MainWindow::showSettingsDialog);
 
-    // Anchor to the right: [stretch][status][connect][settings]
+    // Layout: [back][stretch][status][connect][settings]
+    m_connectionLayout->addWidget(m_backButton);
     m_connectionLayout->addStretch();
     m_connectionLayout->addWidget(m_connectionStatusLabel);
     m_connectionLayout->addWidget(m_connectToggleButton);
     m_connectionLayout->addWidget(m_settingsButton);
     
     m_mainLayout->addLayout(m_connectionLayout);
+    
+    // Add separator line
+    QFrame* separator = new QFrame();
+    separator->setFrameShape(QFrame::HLine);
+    separator->setFrameShadow(QFrame::Sunken);
+    separator->setStyleSheet("QFrame { color: palette(mid); }");
+    m_mainLayout->addWidget(separator);
     
     // Create stacked widget for page navigation
     m_stackedWidget = new QStackedWidget();
@@ -633,20 +655,12 @@ void MainWindow::createScreenViewPage() {
     m_screenViewLayout->setSpacing(15);
     m_screenViewLayout->setContentsMargins(0, 0, 0, 0);
     
-    // Client name and back button
+    // Client name header (no back button here anymore, it's in the top bar)
     QHBoxLayout* headerLayout = new QHBoxLayout();
-    m_backButton = new QPushButton("← Back to Client List");
-    m_backButton->setStyleSheet("QPushButton { padding: 8px 16px; font-weight: bold; }");
-    connect(m_backButton, &QPushButton::clicked, this, &MainWindow::onBackToClientListClicked);
-    // Prevent space/enter from triggering navigation accidentally
-    m_backButton->setAutoDefault(false);
-    m_backButton->setDefault(false);
-    m_backButton->setFocusPolicy(Qt::NoFocus);
     
     m_clientNameLabel = new QLabel();
     m_clientNameLabel->setStyleSheet("QLabel { font-size: 16px; font-weight: bold; }");
     
-    headerLayout->addWidget(m_backButton);
     headerLayout->addStretch();
     headerLayout->addWidget(m_clientNameLabel);
     headerLayout->addStretch();
