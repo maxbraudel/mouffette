@@ -1111,14 +1111,19 @@ void MainWindow::updateClientList(const QList<ClientInfo>& clients) {
     m_clientListWidget->clear();
     
     if (clients.isEmpty()) {
-        // Show the "no clients" message centered in the list widget instead of hiding it
+        // Show the "no clients" message centered in the list widget with larger font
         QListWidgetItem* item = new QListWidgetItem("No clients connected. Make sure other devices are running Mouffette and connected to the same server.");
         item->setFlags(Qt::NoItemFlags); // Make it non-selectable and non-interactive
         item->setTextAlignment(Qt::AlignCenter);
         QFont font = item->font();
         font.setItalic(true);
+        font.setPointSize(16); // Make the font larger
         item->setFont(font);
         item->setForeground(QColor(102, 102, 102)); // #666 color
+        
+        // Set a custom size hint to center the item vertically in the list widget
+        item->setSizeHint(QSize(m_clientListWidget->width(), m_clientListWidget->height()));
+        
         m_clientListWidget->addItem(item);
         m_noClientsLabel->hide(); // Hide the separate label since we show message in list
     } else {
