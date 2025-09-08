@@ -73,6 +73,8 @@ MainWindow::MainWindow(QWidget *parent)
     // Set window flags to prevent showing in dock/taskbar when hidden
 #ifdef Q_OS_MACOS
     setWindowFlags(windowFlags() | Qt::Tool);
+    // Keep tool window visible even when app loses focus (prevents auto-hide on deactivate)
+    setAttribute(Qt::WA_MacAlwaysShowToolWindow, true);
 #endif
     
     // Initially disable UI until connected
