@@ -4,6 +4,9 @@ project(MouffetteClient VERSION 1.0.0)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# On Windows, allow building as a console app to see logs in the terminal
+option(CONSOLE_OUTPUT "Build with console subsystem on Windows for visible qDebug logs" OFF)
+
 # Enable Objective-C++ on macOS
 if(APPLE)
     enable_language(OBJCXX)
@@ -28,6 +31,9 @@ set(SOURCES
 # Platform-specific sources
 if(APPLE)
     list(APPEND SOURCES src/MacDockHider.mm)
+else()
+    # Provide a no-op implementation on non-macOS so linking succeeds
+    list(APPEND SOURCES src/MacDockHider.cpp)
 endif()
 
 # Header files
@@ -64,9 +70,12 @@ target_include_directories(MouffetteClient PRIVATE src)
 
 # Platform-specific settings
 if(WIN32)
-    set_target_properties(MouffetteClient PROPERTIES
-        WIN32_EXECUTABLE TRUE
-    )
+    if(NOT CONSOLE_OUTPUT)
+        # GUI subsystem (no console). Set CONSOLE_OUTPUT=ON to see logs in terminal.
+        set_target_properties(MouffetteClient PROPERTIES WIN32_EXECUTABLE TRUE)
+    else()
+        message(STATUS "Building MouffetteClient with console subsystem (logs visible in terminal)")
+    endif()
 endif()
 
 if(APPLE)
