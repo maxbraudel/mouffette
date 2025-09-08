@@ -5,6 +5,7 @@
 #include <QGuiApplication>
 #include <QDebug>
 #include <QCloseEvent>
+#include <QKeyEvent>
 #include <QStackedWidget>
 #include <algorithm>
 
@@ -72,8 +73,11 @@ void MainWindow::showScreenView(const ClientInfo& client) {
     
     // Switch to screen view page
     m_stackedWidget->setCurrentWidget(m_screenViewWidget);
-    // Move focus away from buttons to avoid spacebar activating them
-    if (m_screenCanvas) m_screenCanvas->setFocus(Qt::OtherFocusReason);
+    // Move focus to canvas and recenter with margin
+    if (m_screenCanvas) {
+        m_screenCanvas->setFocus(Qt::OtherFocusReason);
+        m_screenCanvas->recenterWithMargin(33);
+    }
     
     qDebug() << "Screen view now showing. Current widget index:" << m_stackedWidget->currentIndex();
 }
@@ -127,11 +131,23 @@ void MainWindow::onScreenClicked(int screenId) {
 }
 
 bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
-    // Swallow spacebar globally to prevent accidental activations
+    // Swallow spacebar outside of the canvas to prevent accidental activations,
+    // but let it reach the canvas for the recenter shortcut.
     if (event->type() == QEvent::KeyPress) {
         auto* keyEvent = static_cast<QKeyEvent*>(event);
         if (keyEvent->key() == Qt::Key_Space) {
-            return true; // consume
+            QWidget* w = qobject_cast<QWidget*>(obj);
+            bool onCanvas = false;
+            if (m_screenCanvas) {
+                onCanvas = (w == m_screenCanvas) || (w && m_screenCanvas->isAncestorOf(w));
+            }
+            if (!onCanvas) {
+                return true; // consume outside the canvas
+            } else {
+                // Recenter shortcut on canvas regardless of exact focus widget
+                m_screenCanvas->recenterWithMargin(33);
+                return true; // consume
+            }
         }
     }
     if (event->type() == QEvent::MouseButtonPress) {
@@ -170,15 +186,12 @@ void ScreenCanvas::setScreens(const QList<ScreenInfo>& screens) {
     clearScreens();
     createScreenItems();
     
-    // Fit all screens in view
+    // Keep a large scene for free movement and center on screens
+    const double LARGE_SCENE_SIZE = 100000.0;
+    QRectF sceneRect(-LARGE_SCENE_SIZE/2, -LARGE_SCENE_SIZE/2, LARGE_SCENE_SIZE, LARGE_SCENE_SIZE);
+    m_scene->setSceneRect(sceneRect);
     if (!m_screens.isEmpty()) {
-        // Set a very large scene rect to allow free movement
-        const double LARGE_SCENE_SIZE = 100000.0;
-        QRectF sceneRect(-LARGE_SCENE_SIZE/2, -LARGE_SCENE_SIZE/2, LARGE_SCENE_SIZE, LARGE_SCENE_SIZE);
-        m_scene->setSceneRect(sceneRect);
-        
-        // Don't auto-fit, let user control the view
-        // fitInView(sceneRect, Qt::KeepAspectRatio);
+        recenterWithMargin(33);
     }
 }
 
@@ -298,6 +311,39 @@ QMap<int, QRectF> ScreenCanvas::calculateCompactPositions(double scaleFactor, do
     }
     
     return positions;
+}
+
+QRectF ScreenCanvas::screensBoundingRect() const {
+    QRectF bounds;
+    bool first = true;
+    for (auto* item : m_screenItems) {
+        if (!item) continue;
+        QRectF r = item->sceneBoundingRect();
+        if (first) { bounds = r; first = false; }
+        else { bounds = bounds.united(r); }
+    }
+    return bounds;
+}
+
+void ScreenCanvas::recenterWithMargin(int marginPx) {
+    QRectF bounds = screensBoundingRect();
+    if (bounds.isNull() || !bounds.isValid()) return;
+    // Convert pixel margin in view space to scene space using current scale
+    qreal sx = transform().m11();
+    qreal sy = transform().m22();
+    qreal mx = sx != 0 ? marginPx / sx : marginPx;
+    qreal my = sy != 0 ? marginPx / sy : marginPx;
+    bounds.adjust(-mx, -my, mx, my);
+    fitInView(bounds, Qt::KeepAspectRatio);
+}
+
+void ScreenCanvas::keyPressEvent(QKeyEvent* event) {
+    if (event->key() == Qt::Key_Space) {
+        recenterWithMargin(33);
+        event->accept();
+        return;
+    }
+    QGraphicsView::keyPressEvent(event);
 }
 
 bool ScreenCanvas::event(QEvent* event) {

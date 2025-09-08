@@ -41,6 +41,7 @@ public:
     explicit ScreenCanvas(QWidget* parent = nullptr);
     void setScreens(const QList<ScreenInfo>& screens);
     void clearScreens();
+    void recenterWithMargin(int marginPx = 33);
 
 signals:
     void screenClicked(int screenIndex);
@@ -48,6 +49,7 @@ signals:
 protected:
     bool gestureEvent(QGestureEvent* event);
     bool event(QEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
@@ -62,6 +64,7 @@ private:
     void createScreenItems();
     QGraphicsRectItem* createScreenItem(const ScreenInfo& screen, int index, const QRectF& position);
     QMap<int, QRectF> calculateCompactPositions(double scaleFactor, double spacing) const;
+    QRectF screensBoundingRect() const;
 };
 
 class MainWindow : public QMainWindow {
