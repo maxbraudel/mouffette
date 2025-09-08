@@ -26,6 +26,7 @@ public:
     void requestScreens(const QString& targetClientId);
     void watchScreens(const QString& targetClientId);
     void unwatchScreens(const QString& targetClientId);
+    void sendStateSnapshot(const QList<ScreenInfo>& screens, int volumePercent);
     
     // Getters
     QString getClientId() const { return m_clientId; }
@@ -39,6 +40,8 @@ signals:
     void registrationConfirmed(const ClientInfo& clientInfo);
     void screensInfoReceived(const ClientInfo& clientInfo);
     void messageReceived(const QJsonObject& message);
+    void watchStatusChanged(bool watched);
+    void dataRequestReceived();
 
 private slots:
     void onConnected();

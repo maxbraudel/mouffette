@@ -93,6 +93,7 @@ private slots:
     void onSendMediaClicked();
     void onScreenClicked(int screenId);
     void onScreensInfoReceived(const ClientInfo& clientInfo);
+    void onWatchStatusChanged(bool watched);
     
     // System tray slots
     void onTrayIconActivated(QSystemTrayIcon::ActivationReason reason);
@@ -174,6 +175,7 @@ private:
     ClientInfo m_selectedClient;
     QTimer* m_statusUpdateTimer;
     QTimer* m_displaySyncTimer;
+    bool m_isWatched = false; // true when at least one remote client is watching us
     
     // Navigation state
     bool m_ignoreSelectionChange;

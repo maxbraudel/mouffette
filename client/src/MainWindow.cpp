@@ -48,6 +48,16 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_webSocketClient, &WebSocketClient::clientListReceived, this, &MainWindow::onClientListReceived);
     connect(m_webSocketClient, &WebSocketClient::registrationConfirmed, this, &MainWindow::onRegistrationConfirmed);
     connect(m_webSocketClient, &WebSocketClient::screensInfoReceived, this, &MainWindow::onScreensInfoReceived);
+    connect(m_webSocketClient, &WebSocketClient::watchStatusChanged, this, &MainWindow::onWatchStatusChanged);
+    connect(m_webSocketClient, &WebSocketClient::dataRequestReceived, this, [this]() {
+        // Server requested immediate state (on first watch or refresh)
+        m_webSocketClient->sendStateSnapshot(getLocalScreenInfo(), getSystemVolumePercent());
+    });
+    connect(m_webSocketClient, &WebSocketClient::watchStatusChanged, this, &MainWindow::onWatchStatusChanged);
+    connect(m_webSocketClient, &WebSocketClient::dataRequestReceived, this, [this]() {
+        // Server asked us to send current state now
+        m_webSocketClient->sendStateSnapshot(getLocalScreenInfo(), getSystemVolumePercent());
+    });
     
     // Setup status update timer
     m_statusUpdateTimer->setInterval(1000); // Update every second
@@ -58,7 +68,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_displaySyncTimer->setSingleShot(true);
     m_displaySyncTimer->setInterval(300); // debounce bursts of screen change signals
     connect(m_displaySyncTimer, &QTimer::timeout, this, [this]() {
-        if (m_webSocketClient->isConnected()) syncRegistration();
+        if (m_webSocketClient->isConnected() && m_isWatched) syncRegistration();
     });
 
     // Listen to display changes to keep server-side screen info up-to-date
@@ -928,6 +938,14 @@ void MainWindow::onScreensInfoReceived(const ClientInfo& clientInfo) {
     }
 }
 
+void MainWindow::onWatchStatusChanged(bool watched) {
+    // Store watched state locally (as this client being watched by someone else)
+    // We don't need a member; we can gate sending by this flag at runtime.
+    // For simplicity, keep a static so our timers can read it.
+    m_isWatched = watched;
+    qDebug() << "Watch status changed:" << (watched ? "watched" : "not watched");
+}
+
 QList<ScreenInfo> MainWindow::getLocalScreenInfo() {
     QList<ScreenInfo> screens;
     QList<QScreen*> screenList = QGuiApplication::screens();
@@ -1023,7 +1041,8 @@ void MainWindow::setupVolumeMonitoring() {
         int v = getSystemVolumePercent();
         if (v != last) {
             last = v;
-            if (m_webSocketClient->isConnected()) {
+            if (m_webSocketClient->isConnected() && m_isWatched) {
+                // Send update only when we're being watched
                 syncRegistration(); // includes volumePercent now
             }
         }

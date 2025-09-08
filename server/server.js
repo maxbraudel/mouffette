@@ -61,13 +61,25 @@ class MouffetteServer {
                     const set = this.watchersByTarget.get(targetId);
                     if (set) {
                         set.delete(clientId);
-                        if (set.size === 0) this.watchersByTarget.delete(targetId);
+                        if (set.size === 0) {
+                            this.watchersByTarget.delete(targetId);
+                            // Notify target they are no longer watched
+                            const targetClient = this.clients.get(targetId);
+                            if (targetClient && targetClient.ws) {
+                                targetClient.ws.send(JSON.stringify({ type: 'watch_status', watched: false }));
+                            }
+                        }
                     }
                 }
                 // Also remove as target from any watchers set
                 const watchers = this.watchersByTarget.get(clientId);
                 if (watchers) {
                     this.watchersByTarget.delete(clientId);
+                    // Notify this (now targetless) client it's no longer watched
+                    const targetClient = this.clients.get(clientId);
+                    if (targetClient && targetClient.ws) {
+                        targetClient.ws.send(JSON.stringify({ type: 'watch_status', watched: false }));
+                    }
                 }
                 this.clients.delete(clientId);
                 this.broadcastClientList();
@@ -82,12 +94,22 @@ class MouffetteServer {
                     const set = this.watchersByTarget.get(targetId);
                     if (set) {
                         set.delete(clientId);
-                        if (set.size === 0) this.watchersByTarget.delete(targetId);
+                        if (set.size === 0) {
+                            this.watchersByTarget.delete(targetId);
+                            const targetClient = this.clients.get(targetId);
+                            if (targetClient && targetClient.ws) {
+                                targetClient.ws.send(JSON.stringify({ type: 'watch_status', watched: false }));
+                            }
+                        }
                     }
                 }
                 const watchers = this.watchersByTarget.get(clientId);
                 if (watchers) {
                     this.watchersByTarget.delete(clientId);
+                    const targetClient = this.clients.get(clientId);
+                    if (targetClient && targetClient.ws) {
+                        targetClient.ws.send(JSON.stringify({ type: 'watch_status', watched: false }));
+                    }
                 }
                 this.clients.delete(clientId);
                 this.broadcastClientList();
@@ -165,12 +187,23 @@ class MouffetteServer {
         const client = this.clients.get(clientId);
         if (!client) return;
         
-        client.machineName = message.machineName || `Client-${clientId.slice(0, 8)}`;
-        client.screens = message.screens || [];
+        // Only update fields that are explicitly provided to avoid clobbering identity on partial updates
+        if (Object.prototype.hasOwnProperty.call(message, 'machineName')) {
+            client.machineName = message.machineName || `Client-${clientId.slice(0, 8)}`;
+        } else if (!client.machineName) {
+            client.machineName = `Client-${clientId.slice(0, 8)}`;
+        }
+        if (Object.prototype.hasOwnProperty.call(message, 'screens')) {
+            client.screens = message.screens || [];
+        }
         if (typeof message.volumePercent === 'number') {
             client.volumePercent = Math.max(0, Math.min(100, Math.round(message.volumePercent)));
         }
-        client.platform = message.platform || 'unknown';
+        if (Object.prototype.hasOwnProperty.call(message, 'platform')) {
+            client.platform = message.platform || 'unknown';
+        } else if (!client.platform) {
+            client.platform = 'unknown';
+        }
         
         console.log(`✅ Client registered: ${client.machineName} (${client.platform}) with ${client.screens.length} screen(s)`);
         
@@ -290,7 +323,13 @@ class MouffetteServer {
             const set = this.watchersByTarget.get(prevTarget);
             if (set) {
                 set.delete(watcherId);
-                if (set.size === 0) this.watchersByTarget.delete(prevTarget);
+                if (set.size === 0) {
+                    this.watchersByTarget.delete(prevTarget);
+                    const prevTargetClient = this.clients.get(prevTarget);
+                    if (prevTargetClient && prevTargetClient.ws) {
+                        prevTargetClient.ws.send(JSON.stringify({ type: 'watch_status', watched: false }));
+                    }
+                }
             }
         }
         this.watchingByWatcher.set(watcherId, targetId);
@@ -300,7 +339,13 @@ class MouffetteServer {
             this.watchersByTarget.set(targetId, set);
         }
         set.add(watcherId);
-        // Immediately send the current screens to the watcher
+        // Notify target that it is watched (start sending updates)
+        if (target.ws) {
+            target.ws.send(JSON.stringify({ type: 'watch_status', watched: true }));
+            // Ask target to send fresh state now
+            target.ws.send(JSON.stringify({ type: 'data_request', fields: ['screens', 'volume'] }));
+        }
+        // Immediately send the current cached info to the watcher (for fast UI)
         this.handleRequestScreens(watcherId, { targetClientId: targetId });
     }
     
@@ -309,7 +354,13 @@ class MouffetteServer {
         const set = this.watchersByTarget.get(targetId);
         if (set) {
             set.delete(watcherId);
-            if (set.size === 0) this.watchersByTarget.delete(targetId);
+            if (set.size === 0) {
+                this.watchersByTarget.delete(targetId);
+                const targetClient = this.clients.get(targetId);
+                if (targetClient && targetClient.ws) {
+                    targetClient.ws.send(JSON.stringify({ type: 'watch_status', watched: false }));
+                }
+            }
         }
         this.watchingByWatcher.delete(watcherId);
     }

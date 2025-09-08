@@ -117,6 +117,19 @@ void WebSocketClient::unwatchScreens(const QString& targetClientId) {
     sendMessage(message);
 }
 
+void WebSocketClient::sendStateSnapshot(const QList<ScreenInfo>& screens, int volumePercent) {
+    if (!isConnected()) return;
+    QJsonObject msg;
+    msg["type"] = "register"; // reuse register payload to update server-side cache
+    // Keep last known identity fields if available from previous registration
+    // Identity fields are expected to be sent via syncRegistration by MainWindow
+    QJsonArray arr;
+    for (const auto& s : screens) arr.append(s.toJson());
+    msg["screens"] = arr;
+    if (volumePercent >= 0) msg["volumePercent"] = volumePercent;
+    sendMessage(msg);
+}
+
 void WebSocketClient::onConnected() {
     qDebug() << "Connected to server";
     setConnectionStatus("Connected");
@@ -213,6 +226,13 @@ void WebSocketClient::handleMessage(const QJsonObject& message) {
         QJsonObject clientInfoObj = message["clientInfo"].toObject();
         ClientInfo clientInfo = ClientInfo::fromJson(clientInfoObj);
         emit screensInfoReceived(clientInfo);
+    }
+    else if (type == "watch_status") {
+        bool watched = message["watched"].toBool(false);
+        emit watchStatusChanged(watched);
+    }
+    else if (type == "data_request") {
+        emit dataRequestReceived();
     }
     else {
         // Forward unknown messages
