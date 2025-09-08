@@ -16,11 +16,11 @@ MainWindow::MainWindow(QWidget *parent)
     , m_centralWidget(nullptr)
     , m_webSocketClient(new WebSocketClient(this))
     , m_statusUpdateTimer(new QTimer(this))
-    , m_displaySyncTimer(new QTimer(this))
     , m_trayIcon(nullptr)
     , m_screenViewWidget(nullptr)
     , m_screenCanvas(nullptr)
     , m_ignoreSelectionChange(false)
+    , m_displaySyncTimer(new QTimer(this))
 {
     // Check if system tray is available
     if (!QSystemTrayIcon::isSystemTrayAvailable()) {
@@ -35,10 +35,8 @@ MainWindow::MainWindow(QWidget *parent)
     // Connect WebSocket signals
     connect(m_webSocketClient, &WebSocketClient::connected, this, &MainWindow::onConnected);
     connect(m_webSocketClient, &WebSocketClient::disconnected, this, &MainWindow::onDisconnected);
-    connect(m_webSocketClient, &WebSocketClient::connectionError, this, &MainWindow::onConnectionError);
     connect(m_webSocketClient, &WebSocketClient::clientListReceived, this, &MainWindow::onClientListReceived);
     connect(m_webSocketClient, &WebSocketClient::registrationConfirmed, this, &MainWindow::onRegistrationConfirmed);
-    connect(m_webSocketClient, &WebSocketClient::screensInfoReceived, this, &MainWindow::onScreensInfoReceived);
     connect(m_webSocketClient, &WebSocketClient::screensInfoReceived, this, &MainWindow::onScreensInfoReceived);
     
     // Setup status update timer
@@ -841,15 +839,7 @@ void MainWindow::onClientSelectionChanged() {
     }
 }
 
-void MainWindow::onScreensInfoReceived(const ClientInfo& clientInfo) {
-    // Only update if this is for the currently selected client
-    if (clientInfo.getId() != m_selectedClient.getId()) return;
-    m_selectedClient.setScreens(clientInfo.getScreens());
-    if (m_screenCanvas) {
-        m_screenCanvas->setScreens(clientInfo.getScreens());
-        m_screenCanvas->recenterWithMargin(33);
-    }
-}
+// (Duplicate removed) onScreensInfoReceived is implemented later in the file
 
 void MainWindow::syncRegistration() {
     QString machineName = getMachineName();
