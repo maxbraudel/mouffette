@@ -544,20 +544,22 @@ void MainWindow::createClientListPage() {
     layout->addWidget(m_clientListLabel);
     
     m_clientListWidget = new QListWidget();
+    // Use palette-based colors so light/dark themes adapt automatically
     m_clientListWidget->setStyleSheet(
         "QListWidget { "
-        "   border: 2px solid #ccc; "
+        "   border: 1px solid palette(mid); "
         "   border-radius: 5px; "
         "   padding: 5px; "
-        "   background-color: #f9f9f9; "
-        "} "
+        "   background-color: palette(base); "
+        "   color: palette(text); "
+        "}" 
         "QListWidget::item { "
         "   padding: 10px; "
-        "   border-bottom: 1px solid #eee; "
-        "} "
+        "   border-bottom: 1px solid palette(midlight); "
+        "}" 
         "QListWidget::item:selected { "
-        "   background-color: #4a90e2; "
-        "   color: white; "
+        "   background-color: palette(highlight); "
+        "   color: palette(highlighted-text); "
         "}"
     );
     connect(m_clientListWidget, &QListWidget::itemClicked, this, &MainWindow::onClientItemClicked);
@@ -616,7 +618,8 @@ void MainWindow::createScreenViewPage() {
     
     // Volume indicator
     m_volumeIndicator = new QLabel("🔊 Volume: Medium");
-    m_volumeIndicator->setStyleSheet("QLabel { font-size: 14px; color: #333; padding: 5px; }");
+    // Use palette(window-text) so it remains readable in light/dark modes
+    m_volumeIndicator->setStyleSheet("QLabel { font-size: 14px; color: palette(window-text); padding: 5px; }");
     m_volumeIndicator->setAlignment(Qt::AlignCenter);
     m_screenViewLayout->addWidget(m_volumeIndicator);
     
