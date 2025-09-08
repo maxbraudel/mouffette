@@ -21,7 +21,8 @@
 #include <QGraphicsView>
 #include <QGraphicsScene>
 #include <QGraphicsRectItem>
-#include <QWheelEvent>
+#include <QGestureEvent>
+#include <QPinchGesture>
 #include <QScrollBar>
 #include "WebSocketClient.h"
 #include "ClientInfo.h"
@@ -39,17 +40,16 @@ public:
     explicit ScreenCanvas(QWidget* parent = nullptr);
     void setScreens(const QList<ScreenInfo>& screens);
     void clearScreens();
-    void centerOnScreens(int margin = 33);
 
 signals:
     void screenClicked(int screenIndex);
 
 protected:
-    void wheelEvent(QWheelEvent* event) override;
+    bool gestureEvent(QGestureEvent* event);
+    bool event(QEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
-    void keyPressEvent(QKeyEvent* event) override;
 
 private:
     QGraphicsScene* m_scene;

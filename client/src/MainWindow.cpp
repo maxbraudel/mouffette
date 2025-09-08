@@ -5,7 +5,6 @@
 #include <QGuiApplication>
 #include <QDebug>
 #include <QCloseEvent>
-#include <QTimer>
 #include <algorithm>
 
 const QString MainWindow::DEFAULT_SERVER_URL = "ws://192.168.0.188:8080";
@@ -147,8 +146,8 @@ ScreenCanvas::ScreenCanvas(QWidget* parent)
     // Enable mouse tracking for panning
     setMouseTracking(true);
     
-    // Enable keyboard focus for key events
-    setFocusPolicy(Qt::StrongFocus);
+    // Enable pinch gesture
+    grabGesture(Qt::PinchGesture);
 }
 
 void ScreenCanvas::setScreens(const QList<ScreenInfo>& screens) {
@@ -163,10 +162,8 @@ void ScreenCanvas::setScreens(const QList<ScreenInfo>& screens) {
         QRectF sceneRect(-LARGE_SCENE_SIZE/2, -LARGE_SCENE_SIZE/2, LARGE_SCENE_SIZE, LARGE_SCENE_SIZE);
         m_scene->setSceneRect(sceneRect);
         
-        // Delay centering to ensure the view is properly initialized
-        QTimer::singleShot(50, this, [this]() {
-            centerOnScreens();
-        });
+        // Don't auto-fit, let user control the view
+        // fitInView(sceneRect, Qt::KeepAspectRatio);
     }
 }
 
@@ -177,28 +174,6 @@ void ScreenCanvas::clearScreens() {
         delete item;
     }
     m_screenItems.clear();
-}
-
-void ScreenCanvas::centerOnScreens(int margin) {
-    if (m_screenItems.isEmpty()) {
-        return;
-    }
-    
-    // Calculate bounding rect of all screen items
-    QRectF boundingRect;
-    for (QGraphicsRectItem* item : m_screenItems) {
-        if (boundingRect.isNull()) {
-            boundingRect = item->boundingRect().translated(item->pos());
-        } else {
-            boundingRect = boundingRect.united(item->boundingRect().translated(item->pos()));
-        }
-    }
-    
-    // Add margin to the bounding rect
-    boundingRect = boundingRect.adjusted(-margin, -margin, margin, margin);
-    
-    // Fit the view to show all screens with margin
-    fitInView(boundingRect, Qt::KeepAspectRatio);
 }
 
 void ScreenCanvas::createScreenItems() {
@@ -310,17 +285,28 @@ QMap<int, QRectF> ScreenCanvas::calculateCompactPositions(double scaleFactor, do
     return positions;
 }
 
-void ScreenCanvas::wheelEvent(QWheelEvent* event) {
-    // Zoom in/out with mouse wheel
-    const double scaleFactor = 1.15;
-    if (event->angleDelta().y() > 0) {
-        // Zoom in
-        scale(scaleFactor, scaleFactor);
-    } else {
-        // Zoom out
-        scale(1.0 / scaleFactor, 1.0 / scaleFactor);
+bool ScreenCanvas::event(QEvent* event) {
+    if (event->type() == QEvent::Gesture) {
+        return gestureEvent(static_cast<QGestureEvent*>(event));
     }
-    event->accept();
+    return QGraphicsView::event(event);
+}
+
+bool ScreenCanvas::gestureEvent(QGestureEvent* event) {
+    if (QGesture* pinch = event->gesture(Qt::PinchGesture)) {
+        QPinchGesture* pinchGesture = static_cast<QPinchGesture*>(pinch);
+        
+        if (pinchGesture->changeFlags() & QPinchGesture::ScaleFactorChanged) {
+            qreal scaleFactor = pinchGesture->scaleFactor();
+            
+            // Apply zoom based on pinch scale
+            scale(scaleFactor, scaleFactor);
+        }
+        
+        event->accept();
+        return true;
+    }
+    return false;
 }
 
 void ScreenCanvas::mousePressEvent(QMouseEvent* event) {
@@ -361,16 +347,6 @@ void ScreenCanvas::mouseReleaseEvent(QMouseEvent* event) {
         setCursor(Qt::ArrowCursor);
     }
     QGraphicsView::mouseReleaseEvent(event);
-}
-
-void ScreenCanvas::keyPressEvent(QKeyEvent* event) {
-    if (event->key() == Qt::Key_Space) {
-        // Recenter the view on screens when space is pressed
-        centerOnScreens();
-        event->accept();
-    } else {
-        QGraphicsView::keyPressEvent(event);
-    }
 }
 
 MainWindow::~MainWindow() {
