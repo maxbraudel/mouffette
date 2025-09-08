@@ -63,11 +63,13 @@ void WebSocketClient::registerClient(const QString& machineName, const QString& 
     message["platform"] = platform;
     if (volumePercent >= 0) message["volumePercent"] = volumePercent;
     
-    QJsonArray screensArray;
-    for (const auto& screen : screens) {
-        screensArray.append(screen.toJson());
+    if (!screens.isEmpty()) {
+        QJsonArray screensArray;
+        for (const auto& screen : screens) {
+            screensArray.append(screen.toJson());
+        }
+        message["screens"] = screensArray;
     }
-    message["screens"] = screensArray;
     
     sendMessage(message);
     qDebug() << "Registering client:" << machineName << "(" << platform << ")";

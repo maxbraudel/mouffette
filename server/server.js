@@ -339,14 +339,13 @@ class MouffetteServer {
             this.watchersByTarget.set(targetId, set);
         }
         set.add(watcherId);
-        // Notify target that it is watched (start sending updates)
+    // Notify target that it is watched (start sending updates)
         if (target.ws) {
             target.ws.send(JSON.stringify({ type: 'watch_status', watched: true }));
             // Ask target to send fresh state now
             target.ws.send(JSON.stringify({ type: 'data_request', fields: ['screens', 'volume'] }));
         }
-        // Immediately send the current cached info to the watcher (for fast UI)
-        this.handleRequestScreens(watcherId, { targetClientId: targetId });
+    // Do not send cached info; wait for target to reply so watcher receives fresh data only
     }
     
     handleUnwatchScreens(watcherId, message) {

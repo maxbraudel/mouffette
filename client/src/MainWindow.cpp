@@ -124,8 +124,8 @@ void MainWindow::showScreenView(const ClientInfo& client) {
     // Update client name
     m_clientNameLabel->setText(QString("%1 (%2)").arg(client.getMachineName()).arg(client.getPlatform()));
     
-    // Optimistic: show any cached screens quickly while fetching fresh data
-    m_screenCanvas->setScreens(client.getScreens());
+    // Do not show cached screens; wait for fresh data
+    if (m_screenCanvas) m_screenCanvas->clearScreens();
     // Request fresh screen info on demand
     if (!client.getId().isEmpty()) {
         m_webSocketClient->requestScreens(client.getId());
@@ -927,8 +927,13 @@ void MainWindow::onClientSelectionChanged() {
 void MainWindow::syncRegistration() {
     QString machineName = getMachineName();
     QString platform = getPlatformName();
-    QList<ScreenInfo> screens = getLocalScreenInfo();
-    int volumePercent = getSystemVolumePercent();
+    QList<ScreenInfo> screens;
+    int volumePercent = -1;
+    // Only include screens/volume when actively watched; otherwise identity-only
+    if (m_isWatched) {
+        screens = getLocalScreenInfo();
+        volumePercent = getSystemVolumePercent();
+    }
     
     qDebug() << "Sync registration:" << machineName << "on" << platform << "with" << screens.size() << "screens";
     
