@@ -29,6 +29,12 @@ export PATH="/opt/homebrew/opt/qt@6/bin:$PATH"
 ./build.sh
 ```
 
+### Quick Build (Windows PowerShell)
+```powershell
+cd .\client
+./build.ps1 -ConsoleLogs
+```
+
 ### Manual Build
 ```bash
 mkdir build
@@ -60,6 +66,12 @@ cd build
 ```bash
 cd build
 ./MouffetteClient
+```
+
+### Windows (PowerShell, with logs)
+```powershell
+cd .\client
+./run.ps1 -ConsoleLogs
 ```
 
 ## Features (Phase 1)

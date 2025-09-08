@@ -6,7 +6,7 @@
 #include <QDebug>
 #include <QCloseEvent>
 
-const QString MainWindow::DEFAULT_SERVER_URL = "ws://localhost:8080";
+const QString MainWindow::DEFAULT_SERVER_URL = "ws://192.168.0.188:8080";
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)

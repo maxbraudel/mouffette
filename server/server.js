@@ -9,9 +9,10 @@ class MouffetteServer {
     }
 
     start() {
-        this.wss = new WebSocket.Server({ port: this.port });
+        // Bind explicitly to 0.0.0.0 to listen on all IPv4 interfaces (LAN accessible)
+        this.wss = new WebSocket.Server({ port: this.port, host: '0.0.0.0' });
         
-        console.log(`🎯 Mouffette Server started on port ${this.port}`);
+        console.log(`🎯 Mouffette Server started on ws://0.0.0.0:${this.port}`);
         
         this.wss.on('connection', (ws, req) => {
             const clientId = uuidv4();
