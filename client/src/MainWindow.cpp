@@ -13,6 +13,19 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <objbase.h>
+#include <combaseapi.h>
+// Ensure GUIDs (IIDs/CLSIDs) are defined in this translation unit for MinGW linkers
+#ifndef INITGUID
+#define INITGUID
+#endif
+#include <initguid.h>
+#include <mmdeviceapi.h>
+#include <endpointvolume.h>
 #endif
 #ifdef Q_OS_MACOS
 #include <QProcess>
@@ -645,7 +658,7 @@ void MainWindow::createScreenViewPage() {
     m_screenViewLayout->addLayout(headerLayout);
     
     // Volume indicator
-    m_volumeIndicator = new QLabel("� Volume: --");
+    m_volumeIndicator = new QLabel("🔈 Volume: --");
     // Use palette(window-text) so it remains readable in light/dark modes
     m_volumeIndicator->setStyleSheet("QLabel { font-size: 14px; color: palette(window-text); padding: 5px; }");
     m_volumeIndicator->setAlignment(Qt::AlignCenter);
@@ -997,9 +1010,6 @@ int MainWindow::getSystemVolumePercent() {
 #elif defined(Q_OS_WIN)
     // Use Windows Core Audio APIs (MMDevice + IAudioEndpointVolume)
     // Headers are included only on Windows builds.
-    #include <windows.h>
-    #include <mmdeviceapi.h>
-    #include <endpointvolume.h>
     HRESULT hr;
     IMMDeviceEnumerator* pEnum = nullptr;
     IMMDevice* pDevice = nullptr;
