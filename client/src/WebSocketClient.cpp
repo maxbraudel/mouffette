@@ -39,6 +39,8 @@ void WebSocketClient::connectToServer(const QString& serverUrl) {
 }
 
 void WebSocketClient::disconnect() {
+    // Mark this as a user-initiated disconnect so auto-reconnect is suppressed
+    m_userInitiatedDisconnect = true;
     m_reconnectTimer->stop();
     m_reconnectAttempts = 0;
     
@@ -135,6 +137,8 @@ void WebSocketClient::sendStateSnapshot(const QList<ScreenInfo>& screens, int vo
 void WebSocketClient::onConnected() {
     qDebug() << "Connected to server";
     setConnectionStatus("Connected");
+    // Clear user-initiated flag upon successful connection
+    m_userInitiatedDisconnect = false;
     m_reconnectAttempts = 0;
     m_reconnectTimer->stop();
     emit connected();
@@ -145,8 +149,8 @@ void WebSocketClient::onDisconnected() {
     setConnectionStatus("Disconnected");
     emit disconnected();
     
-    // Attempt to reconnect if we haven't reached the max attempts
-    if (m_reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+    // Attempt to reconnect if we haven't reached the max attempts and user didn't disconnect
+    if (!m_userInitiatedDisconnect && m_reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
         m_reconnectAttempts++;
         setConnectionStatus(QString("Reconnecting... (attempt %1/%2)").arg(m_reconnectAttempts).arg(MAX_RECONNECT_ATTEMPTS));
         m_reconnectTimer->start(RECONNECT_INTERVAL);

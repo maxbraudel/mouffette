@@ -82,11 +82,10 @@ private slots:
     void onConnectionError(const QString& error);
     void onClientListReceived(const QList<ClientInfo>& clients);
     void onRegistrationConfirmed(const ClientInfo& clientInfo);
-    void onConnectButtonClicked();
-    void onRefreshButtonClicked();
     void onClientSelectionChanged();
     void onClientItemClicked(QListWidgetItem* item);
     void updateConnectionStatus();
+    void onConnectToggleClicked();
     
     // Screen view slots
     void onBackToClientListClicked();
@@ -109,6 +108,7 @@ private:
     void setupMenuBar();
     void setupSystemTray();
     void connectToServer();
+    void showSettingsDialog();
     // Sync local display/machine info with the server (used on connect and on display changes)
     void syncRegistration();
     QList<ScreenInfo> getLocalScreenInfo();
@@ -138,8 +138,8 @@ private:
     
     // Connection section
     QHBoxLayout* m_connectionLayout;
-    QPushButton* m_connectButton;
-    QPushButton* m_refreshButton;
+    QPushButton* m_settingsButton;
+    QPushButton* m_connectToggleButton;
     QLabel* m_connectionStatusLabel;
     
     // Client list section
@@ -176,6 +176,8 @@ private:
     QTimer* m_statusUpdateTimer;
     QTimer* m_displaySyncTimer;
     bool m_isWatched = false; // true when at least one remote client is watching us
+    bool m_userDisconnected = false; // suppress auto-reconnect UI flows when true
+    QString m_serverUrlConfig; // configurable server URL
     
     // Navigation state
     bool m_ignoreSelectionChange;

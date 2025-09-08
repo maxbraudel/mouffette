@@ -61,6 +61,7 @@ private:
     QString m_connectionStatus;
     QTimer* m_reconnectTimer;
     int m_reconnectAttempts;
+    bool m_userInitiatedDisconnect = false;
     static const int MAX_RECONNECT_ATTEMPTS = 5;
     static const int RECONNECT_INTERVAL = 3000; // 3 seconds
 };

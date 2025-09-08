@@ -9,6 +9,8 @@
 #include <QStackedWidget>
 #include <algorithm>
 #include <cmath>
+#include <QDialog>
+#include <QLineEdit>
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -66,11 +68,6 @@ MainWindow::MainWindow(QWidget *parent)
         // Server requested immediate state (on first watch or refresh)
         m_webSocketClient->sendStateSnapshot(getLocalScreenInfo(), getSystemVolumePercent());
     });
-    connect(m_webSocketClient, &WebSocketClient::watchStatusChanged, this, &MainWindow::onWatchStatusChanged);
-    connect(m_webSocketClient, &WebSocketClient::dataRequestReceived, this, [this]() {
-        // Server asked us to send current state now
-        m_webSocketClient->sendStateSnapshot(getLocalScreenInfo(), getSystemVolumePercent());
-    });
     
     // Setup status update timer
     m_statusUpdateTimer->setInterval(1000); // Update every second
@@ -99,11 +96,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(qApp, &QGuiApplication::screenRemoved, this, [this](QScreen*) {
         m_displaySyncTimer->start();
     });
-    
-    setWindowTitle("Mouffette - Media Sharing");
-    resize(600, 500);
-    
-    // Set window flags to prevent showing in dock/taskbar when hidden
+        // (cleaned) avoid duplicate hookups
 #ifdef Q_OS_MACOS
     setWindowFlags(windowFlags() | Qt::Tool);
     // Keep tool window visible even when app loses focus (prevents auto-hide on deactivate)
@@ -120,7 +113,7 @@ MainWindow::MainWindow(QWidget *parent)
 
 void MainWindow::showScreenView(const ClientInfo& client) {
     qDebug() << "showScreenView called for client:" << client.getMachineName();
-    
+        QLabel* status = new QLabel(m_webSocketClient->getConnectionStatus());
     // Update client name
     m_clientNameLabel->setText(QString("%1 (%2)").arg(client.getMachineName()).arg(client.getPlatform()));
     
@@ -538,22 +531,24 @@ void MainWindow::setupUI() {
     // Connection section (always visible)
     m_connectionLayout = new QHBoxLayout();
     
-    m_connectButton = new QPushButton("Connect to Server");
-    m_connectButton->setStyleSheet("QPushButton { padding: 8px 16px; font-weight: bold; }");
-    connect(m_connectButton, &QPushButton::clicked, this, &MainWindow::onConnectButtonClicked);
-    
-    m_refreshButton = new QPushButton("Refresh");
-    m_refreshButton->setEnabled(false);
-    connect(m_refreshButton, &QPushButton::clicked, this, &MainWindow::onRefreshButtonClicked);
-    
+    // Status label (no "Status:")
     m_connectionStatusLabel = new QLabel("Disconnected");
     m_connectionStatusLabel->setStyleSheet("QLabel { color: red; font-weight: bold; }");
-    
-    m_connectionLayout->addWidget(m_connectButton);
-    m_connectionLayout->addWidget(m_refreshButton);
+
+    // Settings and Connect toggle buttons (right-aligned)
+    m_settingsButton = new QPushButton("Settings");
+    m_settingsButton->setStyleSheet("QPushButton { padding: 8px 16px; font-weight: bold; }");
+    connect(m_settingsButton, &QPushButton::clicked, this, &MainWindow::showSettingsDialog);
+
+    m_connectToggleButton = new QPushButton("Connect");
+    m_connectToggleButton->setStyleSheet("QPushButton { padding: 8px 16px; font-weight: bold; }");
+    connect(m_connectToggleButton, &QPushButton::clicked, this, &MainWindow::onConnectToggleClicked);
+
+    // Anchor to the right: [stretch][status][settings][connect]
     m_connectionLayout->addStretch();
-    m_connectionLayout->addWidget(new QLabel("Status:"));
     m_connectionLayout->addWidget(m_connectionStatusLabel);
+    m_connectionLayout->addWidget(m_settingsButton);
+    m_connectionLayout->addWidget(m_connectToggleButton);
     
     m_mainLayout->addLayout(m_connectionLayout);
     
@@ -798,30 +793,59 @@ void MainWindow::showTrayMessage(const QString& title, const QString& message) {
     }
 }
 
-void MainWindow::onConnectButtonClicked() {
+void MainWindow::onConnectToggleClicked() {
+    if (!m_webSocketClient) return;
     if (m_webSocketClient->isConnected()) {
+        m_userDisconnected = true;
         m_webSocketClient->disconnect();
-        m_connectButton->setText("Connect to Server");
+        if (m_connectToggleButton) m_connectToggleButton->setText("Connect");
     } else {
+        m_userDisconnected = false;
         connectToServer();
-        m_connectButton->setText("Disconnect");
+        if (m_connectToggleButton) m_connectToggleButton->setText("Disconnect");
     }
 }
 
-void MainWindow::onRefreshButtonClicked() {
-    if (m_webSocketClient->isConnected()) {
-        m_webSocketClient->requestClientList();
-    }
+// Settings dialog: server URL with Save/Cancel
+void MainWindow::showSettingsDialog() {
+    QDialog dialog(this);
+    dialog.setWindowTitle("Settings");
+    QVBoxLayout* v = new QVBoxLayout(&dialog);
+    QLabel* urlLabel = new QLabel("Server URL");
+    QLineEdit* urlEdit = new QLineEdit(&dialog);
+    if (m_serverUrlConfig.isEmpty()) m_serverUrlConfig = DEFAULT_SERVER_URL;
+    urlEdit->setText(m_serverUrlConfig);
+    v->addWidget(urlLabel);
+    v->addWidget(urlEdit);
+
+    QHBoxLayout* btnRow = new QHBoxLayout();
+    btnRow->addStretch();
+    QPushButton* cancelBtn = new QPushButton("Cancel");
+    QPushButton* saveBtn = new QPushButton("Save");
+    btnRow->addWidget(cancelBtn);
+    btnRow->addWidget(saveBtn);
+    v->addLayout(btnRow);
+
+    connect(cancelBtn, &QPushButton::clicked, &dialog, &QDialog::reject);
+    connect(saveBtn, &QPushButton::clicked, this, [this, urlEdit, &dialog]() {
+        const QString newUrl = urlEdit->text().trimmed();
+        if (!newUrl.isEmpty()) {
+            m_serverUrlConfig = newUrl;
+        }
+        dialog.accept();
+    });
+
+    dialog.exec();
 }
 
 void MainWindow::connectToServer() {
-    m_webSocketClient->connectToServer(DEFAULT_SERVER_URL);
+    const QString url = m_serverUrlConfig.isEmpty() ? DEFAULT_SERVER_URL : m_serverUrlConfig;
+    m_webSocketClient->connectToServer(url);
 }
 
 void MainWindow::onConnected() {
     setUIEnabled(true);
-    m_connectButton->setText("Disconnect");
-    m_refreshButton->setEnabled(true);
+    if (m_connectToggleButton) m_connectToggleButton->setText("Disconnect");
     
     // Sync this client's info with the server
     syncRegistration();
@@ -834,8 +858,7 @@ void MainWindow::onConnected() {
 
 void MainWindow::onDisconnected() {
     setUIEnabled(false);
-    m_connectButton->setText("Connect to Server");
-    m_refreshButton->setEnabled(false);
+    if (m_connectToggleButton) m_connectToggleButton->setText("Connect");
     
     // Stop watching if any
     if (!m_watchedClientId.isEmpty()) {
@@ -876,8 +899,7 @@ void MainWindow::onConnectionError(const QString& error) {
         QString("Failed to connect to server:\n%1").arg(error));
     
     setUIEnabled(false);
-    m_connectButton->setText("Connect to Server");
-    m_refreshButton->setEnabled(false);
+    // No direct connect/disconnect buttons anymore
 }
 
 void MainWindow::onClientListReceived(const QList<ClientInfo>& clients) {
@@ -1098,7 +1120,7 @@ void MainWindow::updateClientList(const QList<ClientInfo>& clients) {
 }
 
 void MainWindow::setUIEnabled(bool enabled) {
-    m_refreshButton->setEnabled(enabled);
+    // Client list depends on connection
     m_clientListWidget->setEnabled(enabled);
 }
 
