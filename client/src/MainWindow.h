@@ -172,6 +172,7 @@ private:
     ClientInfo m_selectedClient;
     QTimer* m_statusUpdateTimer;
     QTimer* m_displaySyncTimer;
+    QTimer* m_watchRefreshTimer; // fallback polling while watching
     
     // Navigation state
     bool m_ignoreSelectionChange;

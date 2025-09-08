@@ -99,6 +99,7 @@ void WebSocketClient::watchScreens(const QString& targetClientId) {
         qWarning() << "Cannot watch screens: not connected to server";
         return;
     }
+    qDebug() << "Subscribing (watch) to screens of" << targetClientId;
     QJsonObject message;
     message["type"] = "watch_screens";
     message["targetClientId"] = targetClientId;
@@ -110,6 +111,7 @@ void WebSocketClient::unwatchScreens(const QString& targetClientId) {
     qWarning() << "Cannot unwatch screens: not connected to server";
     return;
     }
+    qDebug() << "Unsubscribing (unwatch) from screens of" << targetClientId;
     QJsonObject message;
     message["type"] = "unwatch_screens";
     message["targetClientId"] = targetClientId;

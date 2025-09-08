@@ -21,6 +21,7 @@ MainWindow::MainWindow(QWidget *parent)
     , m_screenCanvas(nullptr)
     , m_ignoreSelectionChange(false)
     , m_displaySyncTimer(new QTimer(this))
+    , m_watchRefreshTimer(new QTimer(this))
 {
     // Check if system tray is available
     if (!QSystemTrayIcon::isSystemTrayAvailable()) {
@@ -65,6 +66,14 @@ MainWindow::MainWindow(QWidget *parent)
     });
     connect(qApp, &QGuiApplication::screenRemoved, this, [this](QScreen*) {
         m_displaySyncTimer->start();
+    });
+
+    // Fallback polling while watching (in case push misses): light frequency
+    m_watchRefreshTimer->setInterval(1500);
+    connect(m_watchRefreshTimer, &QTimer::timeout, this, [this]() {
+        if (!m_watchedClientId.isEmpty() && m_webSocketClient->isConnected()) {
+            m_webSocketClient->requestScreens(m_watchedClientId);
+        }
     });
     
     setWindowTitle("Mouffette - Media Sharing");
@@ -115,6 +124,7 @@ void MainWindow::showScreenView(const ClientInfo& client) {
         if (!client.getId().isEmpty()) {
             m_webSocketClient->watchScreens(client.getId());
             m_watchedClientId = client.getId();
+            m_watchRefreshTimer->start();
         }
     }
     qDebug() << "Screen view now showing. Current widget index:" << m_stackedWidget->currentIndex();
@@ -132,6 +142,7 @@ void MainWindow::showClientListView() {
     if (m_webSocketClient && m_webSocketClient->isConnected() && !m_watchedClientId.isEmpty()) {
         m_webSocketClient->unwatchScreens(m_watchedClientId);
         m_watchedClientId.clear();
+    m_watchRefreshTimer->stop();
     }
     // Clear selection without triggering selection change event
     m_ignoreSelectionChange = true;
@@ -786,6 +797,7 @@ void MainWindow::onDisconnected() {
     // Stop watching if any
     if (!m_watchedClientId.isEmpty()) {
         m_watchedClientId.clear();
+        m_watchRefreshTimer->stop();
     }
     
     // Clear client list
@@ -808,6 +820,7 @@ void MainWindow::startWatchingSelectedClient() {
     }
     m_webSocketClient->watchScreens(targetId);
     m_watchedClientId = targetId;
+    m_watchRefreshTimer->start();
 }
 
 void MainWindow::stopWatchingCurrentClient() {
@@ -815,6 +828,7 @@ void MainWindow::stopWatchingCurrentClient() {
     if (m_watchedClientId.isEmpty()) return;
     m_webSocketClient->unwatchScreens(m_watchedClientId);
     m_watchedClientId.clear();
+    m_watchRefreshTimer->stop();
 }
 
 void MainWindow::onConnectionError(const QString& error) {
