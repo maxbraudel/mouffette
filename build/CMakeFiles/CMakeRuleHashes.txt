@@ -1,0 +1,3 @@
+# Hashes of file build rules.
+6ccc141d8d904c233750cc69f0679bd6 CMakeFiles/MouffetteClient_autogen
+27f6132d9f301468eb6cef70719a4555 MouffetteClient_autogen/timestamp

@@ -1,0 +1,5 @@
+/Users/maxbraudel/Personnel/Dev/Apps/mouffette/build/CMakeFiles/MouffetteClient.dir
+/Users/maxbraudel/Personnel/Dev/Apps/mouffette/build/CMakeFiles/edit_cache.dir
+/Users/maxbraudel/Personnel/Dev/Apps/mouffette/build/CMakeFiles/rebuild_cache.dir
+/Users/maxbraudel/Personnel/Dev/Apps/mouffette/build/CMakeFiles/MouffetteClient_autogen_timestamp_deps.dir
+/Users/maxbraudel/Personnel/Dev/Apps/mouffette/build/CMakeFiles/MouffetteClient_autogen.dir

@@ -1,0 +1,2 @@
+set(__QT_DEPLOY_TARGET_MouffetteClient_FILE /Users/maxbraudel/Personnel/Dev/Apps/mouffette/build/MouffetteClient.app/Contents/MacOS/MouffetteClient)
+set(__QT_DEPLOY_TARGET_MouffetteClient_TYPE EXECUTABLE)

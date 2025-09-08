@@ -15,8 +15,7 @@ MainWindow::MainWindow(QWidget *parent)
     , m_statusUpdateTimer(new QTimer(this))
     , m_trayIcon(nullptr)
     , m_screenViewWidget(nullptr)
-    , m_screensScrollArea(nullptr)
-    , m_screensContainer(nullptr)
+    , m_screenCanvas(nullptr)
 {
     // Check if system tray is available
     if (!QSystemTrayIcon::isSystemTrayAvailable()) {
@@ -66,27 +65,8 @@ void MainWindow::showScreenView(const ClientInfo& client) {
     // Update client name
     m_clientNameLabel->setText(QString("%1 (%2)").arg(client.getMachineName()).arg(client.getPlatform()));
     
-    // Clear existing screens
-    QLayoutItem* item;
-    while ((item = m_screensLayout->takeAt(0))) {
-        if (item->widget()) {
-            delete item->widget();
-        }
-        delete item;
-    }
-    
-    // Add stretch at the beginning
-    m_screensLayout->addStretch();
-    
-    // Create screen widgets
-    const QList<ScreenInfo>& screens = client.getScreens();
-    for (int i = 0; i < screens.size(); ++i) {
-        QWidget* screenWidget = createScreenWidget(screens[i], i);
-        m_screensLayout->addWidget(screenWidget);
-    }
-    
-    // Add stretch at the end
-    m_screensLayout->addStretch();
+    // Set screens in the canvas
+    m_screenCanvas->setScreens(client.getScreens());
     
     // Update volume indicator (placeholder for now)
     updateVolumeIndicator();
@@ -111,55 +91,6 @@ void MainWindow::showClientListView() {
     
     // Clear selection
     m_clientListWidget->clearSelection();
-}
-
-QWidget* MainWindow::createScreenWidget(const ScreenInfo& screen, int index) {
-    QWidget* screenWidget = new QWidget();
-    screenWidget->setFixedSize(200, 150); // Fixed size for consistent display
-    screenWidget->setStyleSheet(
-        "QWidget { "
-        "   background-color: #2a2a2a; "
-        "   border: 2px solid #4a90e2; "
-        "   border-radius: 8px; "
-        "   margin: 5px; "
-        "} "
-        "QWidget:hover { "
-        "   border-color: #66a3ff; "
-        "   background-color: #3a3a3a; "
-        "}"
-    );
-    
-    QVBoxLayout* layout = new QVBoxLayout(screenWidget);
-    layout->setAlignment(Qt::AlignCenter);
-    
-    // Screen icon/representation
-    QLabel* screenIcon = new QLabel("🖥️");
-    screenIcon->setStyleSheet("QLabel { font-size: 48px; color: #4a90e2; }");
-    screenIcon->setAlignment(Qt::AlignCenter);
-    layout->addWidget(screenIcon);
-    
-    // Screen info
-    QString screenText = QString("Screen %1").arg(index + 1);
-    if (screen.primary) {
-        screenText += " (Primary)";
-    }
-    
-    QLabel* screenLabel = new QLabel(screenText);
-    screenLabel->setStyleSheet("QLabel { color: white; font-weight: bold; font-size: 12px; }");
-    screenLabel->setAlignment(Qt::AlignCenter);
-    layout->addWidget(screenLabel);
-    
-    QLabel* resolutionLabel = new QLabel(QString("%1 x %2").arg(screen.width).arg(screen.height));
-    resolutionLabel->setStyleSheet("QLabel { color: #cccccc; font-size: 10px; }");
-    resolutionLabel->setAlignment(Qt::AlignCenter);
-    layout->addWidget(resolutionLabel);
-    
-    // Make it clickable
-    screenWidget->installEventFilter(this);
-    screenWidget->setProperty("screenIndex", index);
-    screenWidget->setCursor(Qt::PointingHandCursor);
-    
-    return screenWidget;
 }
 
 void MainWindow::updateVolumeIndicator() {
@@ -196,6 +127,177 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
         }
     }
     return QMainWindow::eventFilter(obj, event);
+}
+
+// ScreenCanvas implementation
+ScreenCanvas::ScreenCanvas(QWidget* parent)
+    : QGraphicsView(parent)
+    , m_scene(new QGraphicsScene(this))
+    , m_panning(false)
+{
+    setScene(m_scene);
+    setDragMode(QGraphicsView::NoDrag);
+    setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    setBackgroundBrush(QBrush(QColor(45, 45, 45)));
+    setRenderHint(QPainter::Antialiasing);
+    
+    // Enable mouse tracking for panning
+    setMouseTracking(true);
+}
+
+void ScreenCanvas::setScreens(const QList<ScreenInfo>& screens) {
+    m_screens = screens;
+    clearScreens();
+    createScreenItems();
+    
+    // Fit all screens in view
+    if (!m_screens.isEmpty()) {
+        QRectF sceneRect = calculateSceneRect();
+        m_scene->setSceneRect(sceneRect);
+        fitInView(sceneRect, Qt::KeepAspectRatio);
+    }
+}
+
+void ScreenCanvas::clearScreens() {
+    // Clear existing screen items
+    for (QGraphicsRectItem* item : m_screenItems) {
+        m_scene->removeItem(item);
+        delete item;
+    }
+    m_screenItems.clear();
+}
+
+void ScreenCanvas::createScreenItems() {
+    const double SCALE_FACTOR = 0.2; // Scale down screens to 20% of their actual size
+    
+    for (int i = 0; i < m_screens.size(); ++i) {
+        const ScreenInfo& screen = m_screens[i];
+        QGraphicsRectItem* screenItem = createScreenItem(screen, i);
+        m_screenItems.append(screenItem);
+        m_scene->addItem(screenItem);
+    }
+}
+
+QGraphicsRectItem* ScreenCanvas::createScreenItem(const ScreenInfo& screen, int index) {
+    const double SCALE_FACTOR = 0.2;
+    
+    // Calculate scaled position and size while maintaining aspect ratio
+    QRectF rect(screen.x * SCALE_FACTOR, screen.y * SCALE_FACTOR, 
+                screen.width * SCALE_FACTOR, screen.height * SCALE_FACTOR);
+    
+    QGraphicsRectItem* item = new QGraphicsRectItem(rect);
+    
+    // Set appearance
+    if (screen.primary) {
+        item->setBrush(QBrush(QColor(74, 144, 226, 180))); // Primary screen - blue
+        item->setPen(QPen(QColor(74, 144, 226), 3));
+    } else {
+        item->setBrush(QBrush(QColor(80, 80, 80, 180))); // Secondary screen - gray
+        item->setPen(QPen(QColor(160, 160, 160), 2));
+    }
+    
+    // Store screen index for click handling
+    item->setData(0, index);
+    
+    // Add screen label
+    QGraphicsTextItem* label = new QGraphicsTextItem(QString("Screen %1\n%2×%3")
+        .arg(index + 1)
+        .arg(screen.width)
+        .arg(screen.height));
+    label->setDefaultTextColor(Qt::white);
+    label->setFont(QFont("Arial", 12, QFont::Bold));
+    
+    // Center the label on the screen
+    QRectF labelRect = label->boundingRect();
+    QRectF screenRect = item->rect();
+    label->setPos(screenRect.center() - labelRect.center());
+    label->setParentItem(item);
+    
+    return item;
+}
+
+QRectF ScreenCanvas::calculateSceneRect() const {
+    if (m_screens.isEmpty()) {
+        return QRectF(0, 0, 800, 600);
+    }
+    
+    const double SCALE_FACTOR = 0.2;
+    const double MARGIN = 50;
+    
+    // Calculate bounding box of all screens
+    int minX = m_screens[0].x;
+    int minY = m_screens[0].y;
+    int maxX = m_screens[0].x + m_screens[0].width;
+    int maxY = m_screens[0].y + m_screens[0].height;
+    
+    for (const ScreenInfo& screen : m_screens) {
+        minX = qMin(minX, screen.x);
+        minY = qMin(minY, screen.y);
+        maxX = qMax(maxX, screen.x + screen.width);
+        maxY = qMax(maxY, screen.y + screen.height);
+    }
+    
+    // Scale and add margin
+    QRectF rect(minX * SCALE_FACTOR - MARGIN, 
+                minY * SCALE_FACTOR - MARGIN,
+                (maxX - minX) * SCALE_FACTOR + 2 * MARGIN,
+                (maxY - minY) * SCALE_FACTOR + 2 * MARGIN);
+    
+    return rect;
+}
+
+void ScreenCanvas::wheelEvent(QWheelEvent* event) {
+    // Zoom in/out with mouse wheel
+    const double scaleFactor = 1.15;
+    if (event->angleDelta().y() > 0) {
+        // Zoom in
+        scale(scaleFactor, scaleFactor);
+    } else {
+        // Zoom out
+        scale(1.0 / scaleFactor, 1.0 / scaleFactor);
+    }
+    event->accept();
+}
+
+void ScreenCanvas::mousePressEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton) {
+        // Check if clicking on a screen item
+        QGraphicsItem* item = itemAt(event->pos());
+        if (item && item->type() == QGraphicsRectItem::Type) {
+            QGraphicsRectItem* rectItem = qgraphicsitem_cast<QGraphicsRectItem*>(item);
+            if (rectItem && rectItem->data(0).isValid()) {
+                int screenIndex = rectItem->data(0).toInt();
+                emit screenClicked(screenIndex);
+                return;
+            }
+        }
+        
+        // Start panning
+        m_panning = true;
+        m_lastPanPoint = event->pos();
+        setCursor(Qt::ClosedHandCursor);
+    }
+    QGraphicsView::mousePressEvent(event);
+}
+
+void ScreenCanvas::mouseMoveEvent(QMouseEvent* event) {
+    if (m_panning) {
+        // Pan the view
+        QPoint delta = event->pos() - m_lastPanPoint;
+        horizontalScrollBar()->setValue(horizontalScrollBar()->value() - delta.x());
+        verticalScrollBar()->setValue(verticalScrollBar()->value() - delta.y());
+        m_lastPanPoint = event->pos();
+    }
+    QGraphicsView::mouseMoveEvent(event);
+}
+
+void ScreenCanvas::mouseReleaseEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton && m_panning) {
+        m_panning = false;
+        setCursor(Qt::ArrowCursor);
+    }
+    QGraphicsView::mouseReleaseEvent(event);
 }
 
 MainWindow::~MainWindow() {
@@ -298,20 +400,11 @@ void MainWindow::setupUI() {
     m_volumeIndicator->setAlignment(Qt::AlignCenter);
     m_screenViewLayout->addWidget(m_volumeIndicator);
     
-    // Screens scroll area
-    m_screensScrollArea = new QScrollArea();
-    m_screensScrollArea->setWidgetResizable(true);
-    m_screensScrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    m_screensScrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    m_screensScrollArea->setMinimumHeight(300);
-    
-    m_screensContainer = new QWidget();
-    m_screensLayout = new QHBoxLayout(m_screensContainer);
-    m_screensLayout->setSpacing(20);
-    m_screensLayout->addStretch(); // Center the screens
-    
-    m_screensScrollArea->setWidget(m_screensContainer);
-    m_screenViewLayout->addWidget(m_screensScrollArea);
+    // Screen canvas
+    m_screenCanvas = new ScreenCanvas();
+    m_screenCanvas->setMinimumHeight(400);
+    connect(m_screenCanvas, &ScreenCanvas::screenClicked, this, &MainWindow::onScreenClicked);
+    m_screenViewLayout->addWidget(m_screenCanvas);
     
     // Send button
     m_sendButton = new QPushButton("Send Media to All Screens");
@@ -545,7 +638,7 @@ QList<ScreenInfo> MainWindow::getLocalScreenInfo() {
         QRect geometry = screen->geometry();
         bool isPrimary = (screen == QGuiApplication::primaryScreen());
         
-        ScreenInfo screenInfo(i, geometry.width(), geometry.height(), isPrimary);
+        ScreenInfo screenInfo(i, geometry.width(), geometry.height(), geometry.x(), geometry.y(), isPrimary);
         screens.append(screenInfo);
     }
     

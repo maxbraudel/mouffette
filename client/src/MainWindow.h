@@ -18,6 +18,11 @@
 #include <QEvent>
 #include <QMouseEvent>
 #include <QMessageBox>
+#include <QGraphicsView>
+#include <QGraphicsScene>
+#include <QGraphicsRectItem>
+#include <QWheelEvent>
+#include <QScrollBar>
 #include "WebSocketClient.h"
 #include "ClientInfo.h"
 
@@ -25,6 +30,36 @@ QT_BEGIN_NAMESPACE
 class QAction;
 class QMenu;
 QT_END_NAMESPACE
+
+// Custom screen canvas widget with zoom and pan capabilities
+class ScreenCanvas : public QGraphicsView {
+    Q_OBJECT
+
+public:
+    explicit ScreenCanvas(QWidget* parent = nullptr);
+    void setScreens(const QList<ScreenInfo>& screens);
+    void clearScreens();
+
+signals:
+    void screenClicked(int screenIndex);
+
+protected:
+    void wheelEvent(QWheelEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+
+private:
+    QGraphicsScene* m_scene;
+    QList<QGraphicsRectItem*> m_screenItems;
+    QList<ScreenInfo> m_screens;
+    bool m_panning;
+    QPoint m_lastPanPoint;
+    
+    void createScreenItems();
+    QGraphicsRectItem* createScreenItem(const ScreenInfo& screen, int index);
+    QRectF calculateSceneRect() const;
+};
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -97,9 +132,7 @@ private:
     QWidget* m_screenViewWidget;
     QVBoxLayout* m_screenViewLayout;
     QLabel* m_clientNameLabel;
-    QScrollArea* m_screensScrollArea;
-    QWidget* m_screensContainer;
-    QHBoxLayout* m_screensLayout;
+    ScreenCanvas* m_screenCanvas;
     QLabel* m_volumeIndicator;
     QPushButton* m_sendButton;
     QPushButton* m_backButton;

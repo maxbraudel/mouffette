@@ -7,6 +7,8 @@ QJsonObject ScreenInfo::toJson() const {
     obj["id"] = id;
     obj["width"] = width;
     obj["height"] = height;
+    obj["x"] = x;
+    obj["y"] = y;
     obj["primary"] = primary;
     return obj;
 }
@@ -16,6 +18,8 @@ ScreenInfo ScreenInfo::fromJson(const QJsonObject& json) {
     screen.id = json["id"].toInt();
     screen.width = json["width"].toInt();
     screen.height = json["height"].toInt();
+    screen.x = json["x"].toInt(0);
+    screen.y = json["y"].toInt(0);
     screen.primary = json["primary"].toBool();
     return screen;
 }
