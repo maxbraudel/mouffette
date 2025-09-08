@@ -76,8 +76,7 @@ QString ClientInfo::getDisplayText() const {
     } else {
         platformIcon = "💻";
     }
-    
-    QString screenText = QString("%1 screen%2").arg(m_screens.size()).arg(m_screens.size() != 1 ? "s" : "");
-    QString vol = (m_volumePercent >= 0) ? QString(" • %1%%").arg(m_volumePercent) : QString();
-    return QString("%1 %2 (%3%4)").arg(platformIcon).arg(m_machineName).arg(screenText).arg(vol);
+
+    // Show only platform icon and machine name; omit screens/volume to avoid stale info
+    return QString("%1 %2").arg(platformIcon).arg(m_machineName);
 }
