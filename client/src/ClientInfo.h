@@ -31,6 +31,7 @@ public:
     QString getPlatform() const { return m_platform; }
     QString getStatus() const { return m_status; }
     QList<ScreenInfo> getScreens() const { return m_screens; }
+    int getVolumePercent() const { return m_volumePercent; }
     
     // Setters
     void setId(const QString& id) { m_id = id; }
@@ -38,6 +39,7 @@ public:
     void setPlatform(const QString& platform) { m_platform = platform; }
     void setStatus(const QString& status) { m_status = status; }
     void setScreens(const QList<ScreenInfo>& screens) { m_screens = screens; }
+    void setVolumePercent(int v) { m_volumePercent = v; }
     
     // JSON serialization
     QJsonObject toJson() const;
@@ -53,6 +55,7 @@ private:
     QString m_platform;
     QString m_status;
     QList<ScreenInfo> m_screens;
+    int m_volumePercent = -1; // 0-100, -1 when unknown
 };
 
 #endif // CLIENTINFO_H

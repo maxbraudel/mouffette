@@ -38,6 +38,7 @@ QJsonObject ClientInfo::toJson() const {
     obj["machineName"] = m_machineName;
     obj["platform"] = m_platform;
     obj["status"] = m_status;
+    if (m_volumePercent >= 0) obj["volumePercent"] = m_volumePercent;
     
     QJsonArray screensArray;
     for (const auto& screen : m_screens) {
@@ -54,6 +55,7 @@ ClientInfo ClientInfo::fromJson(const QJsonObject& json) {
     client.m_machineName = json["machineName"].toString();
     client.m_platform = json["platform"].toString();
     client.m_status = json["status"].toString();
+    client.m_volumePercent = json.contains("volumePercent") ? json["volumePercent"].toInt(-1) : -1;
     
     QJsonArray screensArray = json["screens"].toArray();
     for (const auto& screenValue : screensArray) {
@@ -76,6 +78,6 @@ QString ClientInfo::getDisplayText() const {
     }
     
     QString screenText = QString("%1 screen%2").arg(m_screens.size()).arg(m_screens.size() != 1 ? "s" : "");
-    
-    return QString("%1 %2 (%3)").arg(platformIcon).arg(m_machineName).arg(screenText);
+    QString vol = (m_volumePercent >= 0) ? QString(" • %1%%").arg(m_volumePercent) : QString();
+    return QString("%1 %2 (%3%4)").arg(platformIcon).arg(m_machineName).arg(screenText).arg(vol);
 }

@@ -21,7 +21,7 @@ public:
     bool isConnected() const;
     
     // Client registration
-    void registerClient(const QString& machineName, const QString& platform, const QList<ScreenInfo>& screens);
+    void registerClient(const QString& machineName, const QString& platform, const QList<ScreenInfo>& screens, int volumePercent);
     void requestClientList();
     void requestScreens(const QString& targetClientId);
     void watchScreens(const QString& targetClientId);

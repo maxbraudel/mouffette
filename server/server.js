@@ -24,6 +24,7 @@ class MouffetteServer {
                 ws: ws,
                 machineName: null,
                 screens: [],
+                volumePercent: -1,
                 status: 'connected',
                 connectedAt: new Date().toISOString()
             };
@@ -154,7 +155,8 @@ class MouffetteServer {
                 id: target.id,
                 machineName: target.machineName,
                 platform: target.platform,
-                screens: target.screens
+                screens: target.screens,
+                volumePercent: target.volumePercent
             }
         }));
     }
@@ -165,6 +167,9 @@ class MouffetteServer {
         
         client.machineName = message.machineName || `Client-${clientId.slice(0, 8)}`;
         client.screens = message.screens || [];
+        if (typeof message.volumePercent === 'number') {
+            client.volumePercent = Math.max(0, Math.min(100, Math.round(message.volumePercent)));
+        }
         client.platform = message.platform || 'unknown';
         
         console.log(`✅ Client registered: ${client.machineName} (${client.platform}) with ${client.screens.length} screen(s)`);
@@ -176,7 +181,8 @@ class MouffetteServer {
                 id: clientId,
                 machineName: client.machineName,
                 screens: client.screens,
-                platform: client.platform
+                platform: client.platform,
+                volumePercent: client.volumePercent
             }
         }));
         
@@ -197,6 +203,7 @@ class MouffetteServer {
                 machineName: c.machineName,
                 screens: c.screens,
                 platform: c.platform,
+                volumePercent: c.volumePercent,
                 status: c.status
             }));
         
@@ -321,7 +328,8 @@ class MouffetteServer {
                     id: target.id,
                     machineName: target.machineName,
                     platform: target.platform,
-                    screens: target.screens
+                    screens: target.screens,
+                    volumePercent: target.volumePercent
                 }
             }));
         }

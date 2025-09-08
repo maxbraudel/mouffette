@@ -51,7 +51,7 @@ bool WebSocketClient::isConnected() const {
     return m_webSocket && m_webSocket->state() == QAbstractSocket::ConnectedState;
 }
 
-void WebSocketClient::registerClient(const QString& machineName, const QString& platform, const QList<ScreenInfo>& screens) {
+void WebSocketClient::registerClient(const QString& machineName, const QString& platform, const QList<ScreenInfo>& screens, int volumePercent) {
     if (!isConnected()) {
         qWarning() << "Cannot register client: not connected to server";
         return;
@@ -61,6 +61,7 @@ void WebSocketClient::registerClient(const QString& machineName, const QString& 
     message["type"] = "register";
     message["machineName"] = machineName;
     message["platform"] = platform;
+    if (volumePercent >= 0) message["volumePercent"] = volumePercent;
     
     QJsonArray screensArray;
     for (const auto& screen : screens) {

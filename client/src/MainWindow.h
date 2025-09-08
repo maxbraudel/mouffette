@@ -113,6 +113,8 @@ private:
     QList<ScreenInfo> getLocalScreenInfo();
     QString getMachineName();
     QString getPlatformName();
+    int getSystemVolumePercent();
+    void setupVolumeMonitoring();
     void updateClientList(const QList<ClientInfo>& clients);
     void setUIEnabled(bool enabled);
     void showTrayMessage(const QString& title, const QString& message);

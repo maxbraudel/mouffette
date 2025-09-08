@@ -8,6 +8,7 @@
 #include <QKeyEvent>
 #include <QStackedWidget>
 #include <algorithm>
+#include <QProcess>
 
 const QString MainWindow::DEFAULT_SERVER_URL = "ws://192.168.0.188:8080";
 
@@ -31,6 +32,7 @@ MainWindow::MainWindow(QWidget *parent)
     setupUI();
     setupMenuBar();
     setupSystemTray();
+    setupVolumeMonitoring();
     
     // Connect WebSocket signals
     connect(m_webSocketClient, &WebSocketClient::connected, this, &MainWindow::onConnected);
@@ -157,9 +159,15 @@ void MainWindow::onClientItemClicked(QListWidgetItem* item) {
 }
 
 void MainWindow::updateVolumeIndicator() {
-    // Placeholder implementation - in real app this would get actual volume
-    // For now, show medium volume as demonstration
-    m_volumeIndicator->setText("Volume: 🔉 Medium");
+    int vol = m_selectedClient.getVolumePercent();
+    QString text;
+    if (vol >= 0) {
+        QString icon = (vol == 0) ? "🔇" : (vol < 34 ? "🔈" : (vol < 67 ? "🔉" : "🔊"));
+        text = QString("%1 Volume: %2%%").arg(icon).arg(vol);
+    } else {
+        text = QString("🔈 Volume: --");
+    }
+    m_volumeIndicator->setText(text);
 }
 
 void MainWindow::onBackToClientListClicked() {
@@ -889,10 +897,11 @@ void MainWindow::syncRegistration() {
     QString machineName = getMachineName();
     QString platform = getPlatformName();
     QList<ScreenInfo> screens = getLocalScreenInfo();
+    int volumePercent = getSystemVolumePercent();
     
     qDebug() << "Sync registration:" << machineName << "on" << platform << "with" << screens.size() << "screens";
     
-    m_webSocketClient->registerClient(machineName, platform, screens);
+    m_webSocketClient->registerClient(machineName, platform, screens, volumePercent);
 }
 
 void MainWindow::onScreensInfoReceived(const ClientInfo& clientInfo) {
@@ -906,6 +915,8 @@ void MainWindow::onScreensInfoReceived(const ClientInfo& clientInfo) {
         }
         // Optional: refresh UI labels if platform/machine changed
         m_clientNameLabel->setText(QString("%1 (%2)").arg(clientInfo.getMachineName()).arg(clientInfo.getPlatform()));
+    // Refresh volume UI based on latest info
+    updateVolumeIndicator();
     }
 }
 
@@ -943,6 +954,44 @@ QString MainWindow::getPlatformName() {
 #else
     return "Unknown";
 #endif
+}
+
+int MainWindow::getSystemVolumePercent() {
+#ifdef Q_OS_MACOS
+    // Query macOS system output volume (0-100) via AppleScript
+    QProcess proc;
+    proc.start("/usr/bin/osascript", {"-e", "output volume of (get volume settings)"});
+    if (!proc.waitForFinished(1000)) return -1;
+    QByteArray out = proc.readAllStandardOutput().trimmed();
+    bool ok = false;
+    int vol = QString::fromUtf8(out).toInt(&ok);
+    if (!ok) return -1;
+    vol = std::clamp(vol, 0, 100);
+    return vol;
+#elif defined(Q_OS_WIN)
+    return -1; // TODO: Implement with Windows audio APIs if needed
+#elif defined(Q_OS_LINUX)
+    return -1; // TODO: Implement via PulseAudio/PipeWire if needed
+#else
+    return -1;
+#endif
+}
+
+void MainWindow::setupVolumeMonitoring() {
+    // Poll system volume and sync to server when it changes.
+    QTimer* volTimer = new QTimer(this);
+    volTimer->setInterval(1200); // ~1.2s cadence
+    connect(volTimer, &QTimer::timeout, this, [this]() {
+        static int last = -2; // sentinel distinct from unknown -1
+        int v = getSystemVolumePercent();
+        if (v != last) {
+            last = v;
+            if (m_webSocketClient->isConnected()) {
+                syncRegistration(); // includes volumePercent now
+            }
+        }
+    });
+    volTimer->start();
 }
 
 void MainWindow::updateClientList(const QList<ClientInfo>& clients) {
