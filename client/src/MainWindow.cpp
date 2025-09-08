@@ -5,6 +5,7 @@
 #include <QGuiApplication>
 #include <QDebug>
 #include <QCloseEvent>
+#include <algorithm>
 
 const QString MainWindow::DEFAULT_SERVER_URL = "ws://192.168.0.188:8080";
 
@@ -170,23 +171,24 @@ void ScreenCanvas::clearScreens() {
 
 void ScreenCanvas::createScreenItems() {
     const double SCALE_FACTOR = 0.2; // Scale down screens to 20% of their actual size
+    const double SCREEN_SPACING = 5.0; // Small gap between adjacent screens
+    
+    // Calculate compact positioning
+    QMap<int, QRectF> compactPositions = calculateCompactPositions(SCALE_FACTOR, SCREEN_SPACING);
     
     for (int i = 0; i < m_screens.size(); ++i) {
         const ScreenInfo& screen = m_screens[i];
-        QGraphicsRectItem* screenItem = createScreenItem(screen, i);
+        QGraphicsRectItem* screenItem = createScreenItem(screen, i, compactPositions[i]);
         m_screenItems.append(screenItem);
         m_scene->addItem(screenItem);
     }
 }
 
-QGraphicsRectItem* ScreenCanvas::createScreenItem(const ScreenInfo& screen, int index) {
+QGraphicsRectItem* ScreenCanvas::createScreenItem(const ScreenInfo& screen, int index, const QRectF& position) {
     const double SCALE_FACTOR = 0.2;
     
-    // Calculate scaled position and size while maintaining aspect ratio
-    QRectF rect(screen.x * SCALE_FACTOR, screen.y * SCALE_FACTOR, 
-                screen.width * SCALE_FACTOR, screen.height * SCALE_FACTOR);
-    
-    QGraphicsRectItem* item = new QGraphicsRectItem(rect);
+    // Use the provided compact position instead of OS coordinates
+    QGraphicsRectItem* item = new QGraphicsRectItem(position);
     
     // Set appearance
     if (screen.primary) {
@@ -224,27 +226,84 @@ QRectF ScreenCanvas::calculateSceneRect() const {
     
     const double SCALE_FACTOR = 0.2;
     const double MARGIN = 50;
+    const double SCREEN_SPACING = 5.0;
     
-    // Calculate bounding box of all screens
-    int minX = m_screens[0].x;
-    int minY = m_screens[0].y;
-    int maxX = m_screens[0].x + m_screens[0].width;
-    int maxY = m_screens[0].y + m_screens[0].height;
+    // Calculate compact positioning
+    QMap<int, QRectF> compactPositions = calculateCompactPositions(SCALE_FACTOR, SCREEN_SPACING);
     
-    for (const ScreenInfo& screen : m_screens) {
-        minX = qMin(minX, screen.x);
-        minY = qMin(minY, screen.y);
-        maxX = qMax(maxX, screen.x + screen.width);
-        maxY = qMax(maxY, screen.y + screen.height);
+    // Find bounding box of compact layout
+    if (compactPositions.isEmpty()) {
+        return QRectF(0, 0, 800, 600);
     }
     
-    // Scale and add margin
-    QRectF rect(minX * SCALE_FACTOR - MARGIN, 
-                minY * SCALE_FACTOR - MARGIN,
-                (maxX - minX) * SCALE_FACTOR + 2 * MARGIN,
-                (maxY - minY) * SCALE_FACTOR + 2 * MARGIN);
+    QRectF boundingBox = compactPositions.first();
+    for (const QRectF& rect : compactPositions) {
+        boundingBox = boundingBox.united(rect);
+    }
     
-    return rect;
+    // Add margin
+    boundingBox.adjust(-MARGIN, -MARGIN, MARGIN, MARGIN);
+    
+    return boundingBox;
+}
+
+QMap<int, QRectF> ScreenCanvas::calculateCompactPositions(double scaleFactor, double spacing) const {
+    QMap<int, QRectF> positions;
+    
+    if (m_screens.isEmpty()) {
+        return positions;
+    }
+    
+    // Group screens by their relative positioning
+    // For now, implement a simple left-to-right, top-to-bottom layout
+    // that maintains relative positioning but with minimal gaps
+    
+    // First, sort screens by their actual position (left to right, then top to bottom)
+    QList<QPair<int, ScreenInfo>> screenPairs;
+    for (int i = 0; i < m_screens.size(); ++i) {
+        screenPairs.append(qMakePair(i, m_screens[i]));
+    }
+    
+    // Sort by Y first (top to bottom), then by X (left to right)
+    std::sort(screenPairs.begin(), screenPairs.end(), 
+              [](const QPair<int, ScreenInfo>& a, const QPair<int, ScreenInfo>& b) {
+                  if (qAbs(a.second.y - b.second.y) < 100) { // If roughly same height
+                      return a.second.x < b.second.x; // Sort by X
+                  }
+                  return a.second.y < b.second.y; // Sort by Y
+              });
+    
+    // Layout screens with compact positioning
+    double currentX = 0;
+    double currentY = 0;
+    double rowHeight = 0;
+    int lastY = INT_MIN;
+    
+    for (const auto& pair : screenPairs) {
+        int index = pair.first;
+        const ScreenInfo& screen = pair.second;
+        
+        double screenWidth = screen.width * scaleFactor;
+        double screenHeight = screen.height * scaleFactor;
+        
+        // Start new row if Y position changed significantly
+        if (lastY != INT_MIN && qAbs(screen.y - lastY) > 100) {
+            currentX = 0;
+            currentY += rowHeight + spacing;
+            rowHeight = 0;
+        }
+        
+        // Position the screen
+        QRectF rect(currentX, currentY, screenWidth, screenHeight);
+        positions[index] = rect;
+        
+        // Update for next screen
+        currentX += screenWidth + spacing;
+        rowHeight = qMax(rowHeight, screenHeight);
+        lastY = screen.y;
+    }
+    
+    return positions;
 }
 
 void ScreenCanvas::wheelEvent(QWheelEvent* event) {

@@ -57,8 +57,9 @@ private:
     QPoint m_lastPanPoint;
     
     void createScreenItems();
-    QGraphicsRectItem* createScreenItem(const ScreenInfo& screen, int index);
+    QGraphicsRectItem* createScreenItem(const ScreenInfo& screen, int index, const QRectF& position);
     QRectF calculateSceneRect() const;
+    QMap<int, QRectF> calculateCompactPositions(double scaleFactor, double spacing) const;
 };
 
 class MainWindow : public QMainWindow {
