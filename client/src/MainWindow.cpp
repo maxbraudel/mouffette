@@ -532,23 +532,25 @@ void MainWindow::setupUI() {
     m_connectionLayout = new QHBoxLayout();
     
     // Status label (no "Status:")
-    m_connectionStatusLabel = new QLabel("Disconnected");
+    m_connectionStatusLabel = new QLabel("DISCONNECTED");
     m_connectionStatusLabel->setStyleSheet("QLabel { color: red; font-weight: bold; }");
 
-    // Settings and Connect toggle buttons (right-aligned)
+    // Connect toggle button with fixed width (left of Settings)
+    m_connectToggleButton = new QPushButton("Connect");
+    m_connectToggleButton->setStyleSheet("QPushButton { padding: 8px 16px; font-weight: bold; }");
+    m_connectToggleButton->setFixedWidth(111);
+    connect(m_connectToggleButton, &QPushButton::clicked, this, &MainWindow::onConnectToggleClicked);
+
+    // Settings button
     m_settingsButton = new QPushButton("Settings");
     m_settingsButton->setStyleSheet("QPushButton { padding: 8px 16px; font-weight: bold; }");
     connect(m_settingsButton, &QPushButton::clicked, this, &MainWindow::showSettingsDialog);
 
-    m_connectToggleButton = new QPushButton("Connect");
-    m_connectToggleButton->setStyleSheet("QPushButton { padding: 8px 16px; font-weight: bold; }");
-    connect(m_connectToggleButton, &QPushButton::clicked, this, &MainWindow::onConnectToggleClicked);
-
-    // Anchor to the right: [stretch][status][settings][connect]
+    // Anchor to the right: [stretch][status][connect][settings]
     m_connectionLayout->addStretch();
     m_connectionLayout->addWidget(m_connectionStatusLabel);
-    m_connectionLayout->addWidget(m_settingsButton);
     m_connectionLayout->addWidget(m_connectToggleButton);
+    m_connectionLayout->addWidget(m_settingsButton);
     
     m_mainLayout->addLayout(m_connectionLayout);
     
@@ -620,9 +622,8 @@ void MainWindow::createClientListPage() {
     // Add to stacked widget
     m_stackedWidget->addWidget(m_clientListPage);
     
-    // Initially show no clients message
-    m_clientListWidget->hide();
-    m_noClientsLabel->show();
+    // Initially hide the separate "no clients" label since we'll show it in the list widget itself
+    m_noClientsLabel->hide();
 }
 
 void MainWindow::createScreenViewPage() {
@@ -1110,11 +1111,18 @@ void MainWindow::updateClientList(const QList<ClientInfo>& clients) {
     m_clientListWidget->clear();
     
     if (clients.isEmpty()) {
-        m_clientListWidget->hide();
-        m_noClientsLabel->show();
+        // Show the "no clients" message centered in the list widget instead of hiding it
+        QListWidgetItem* item = new QListWidgetItem("No clients connected. Make sure other devices are running Mouffette and connected to the same server.");
+        item->setFlags(Qt::NoItemFlags); // Make it non-selectable and non-interactive
+        item->setTextAlignment(Qt::AlignCenter);
+        QFont font = item->font();
+        font.setItalic(true);
+        item->setFont(font);
+        item->setForeground(QColor(102, 102, 102)); // #666 color
+        m_clientListWidget->addItem(item);
+        m_noClientsLabel->hide(); // Hide the separate label since we show message in list
     } else {
         m_noClientsLabel->hide();
-        m_clientListWidget->show();
         
         for (const ClientInfo& client : clients) {
             QString displayText = client.getDisplayText();
@@ -1135,7 +1143,8 @@ void MainWindow::setUIEnabled(bool enabled) {
 
 void MainWindow::updateConnectionStatus() {
     QString status = m_webSocketClient->getConnectionStatus();
-    m_connectionStatusLabel->setText(status);
+    // Always display status in uppercase
+    m_connectionStatusLabel->setText(status.toUpper());
     
     if (status == "Connected") {
         m_connectionStatusLabel->setStyleSheet("QLabel { color: green; font-weight: bold; }");
