@@ -72,6 +72,8 @@ void MainWindow::showScreenView(const ClientInfo& client) {
     
     // Switch to screen view page
     m_stackedWidget->setCurrentWidget(m_screenViewWidget);
+    // Move focus away from buttons to avoid spacebar activating them
+    if (m_screenCanvas) m_screenCanvas->setFocus(Qt::OtherFocusReason);
     
     qDebug() << "Screen view now showing. Current widget index:" << m_stackedWidget->currentIndex();
 }
@@ -88,6 +90,16 @@ void MainWindow::showClientListView() {
     m_ignoreSelectionChange = true;
     m_clientListWidget->clearSelection();
     m_ignoreSelectionChange = false;
+}
+
+void MainWindow::onClientItemClicked(QListWidgetItem* item) {
+    if (!item) return;
+    int index = m_clientListWidget->row(item);
+    if (index >= 0 && index < m_availableClients.size()) {
+        const ClientInfo& client = m_availableClients[index];
+        m_selectedClient = client;
+        showScreenView(client);
+    }
 }
 
 void MainWindow::updateVolumeIndicator() {
@@ -115,6 +127,13 @@ void MainWindow::onScreenClicked(int screenId) {
 }
 
 bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
+    // Swallow spacebar globally to prevent accidental activations
+    if (event->type() == QEvent::KeyPress) {
+        auto* keyEvent = static_cast<QKeyEvent*>(event);
+        if (keyEvent->key() == Qt::Key_Space) {
+            return true; // consume
+        }
+    }
     if (event->type() == QEvent::MouseButtonPress) {
         QWidget* widget = qobject_cast<QWidget*>(obj);
         if (widget && widget->property("screenIndex").isValid()) {
@@ -383,6 +402,8 @@ void MainWindow::setupUI() {
     
     // Create stacked widget for page navigation
     m_stackedWidget = new QStackedWidget();
+    // Block stray key events (like space) at the stack level
+    m_stackedWidget->installEventFilter(this);
     m_mainLayout->addWidget(m_stackedWidget);
     
     // Create client list page
@@ -423,7 +444,10 @@ void MainWindow::createClientListPage() {
         "   color: white; "
         "}"
     );
-    connect(m_clientListWidget, &QListWidget::itemSelectionChanged, this, &MainWindow::onClientSelectionChanged);
+    connect(m_clientListWidget, &QListWidget::itemClicked, this, &MainWindow::onClientItemClicked);
+    // Prevent keyboard (space/enter) from triggering navigation
+    m_clientListWidget->setFocusPolicy(Qt::NoFocus);
+    m_clientListWidget->installEventFilter(this);
     layout->addWidget(m_clientListWidget);
     
     m_noClientsLabel = new QLabel("No clients connected. Make sure other devices are running Mouffette and connected to the same server.");
@@ -459,6 +483,10 @@ void MainWindow::createScreenViewPage() {
     m_backButton = new QPushButton("← Back to Client List");
     m_backButton->setStyleSheet("QPushButton { padding: 8px 16px; font-weight: bold; }");
     connect(m_backButton, &QPushButton::clicked, this, &MainWindow::onBackToClientListClicked);
+    // Prevent space/enter from triggering navigation accidentally
+    m_backButton->setAutoDefault(false);
+    m_backButton->setDefault(false);
+    m_backButton->setFocusPolicy(Qt::NoFocus);
     
     m_clientNameLabel = new QLabel();
     m_clientNameLabel->setStyleSheet("QLabel { font-size: 16px; font-weight: bold; }");
@@ -480,6 +508,10 @@ void MainWindow::createScreenViewPage() {
     m_screenCanvas = new ScreenCanvas();
     m_screenCanvas->setMinimumHeight(400);
     connect(m_screenCanvas, &ScreenCanvas::screenClicked, this, &MainWindow::onScreenClicked);
+    // Ensure focus is on canvas, and block stray key events
+    m_screenViewWidget->installEventFilter(this);
+    m_screenCanvas->setFocusPolicy(Qt::StrongFocus);
+    m_screenCanvas->installEventFilter(this);
     m_screenViewLayout->addWidget(m_screenCanvas);
     
     // Send button

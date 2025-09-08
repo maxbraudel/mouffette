@@ -80,6 +80,7 @@ private slots:
     void onConnectButtonClicked();
     void onRefreshButtonClicked();
     void onClientSelectionChanged();
+    void onClientItemClicked(QListWidgetItem* item);
     void updateConnectionStatus();
     
     // Screen view slots
