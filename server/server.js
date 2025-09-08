@@ -6,6 +6,9 @@ class MouffetteServer {
         this.port = port;
         this.clients = new Map(); // clientId -> client info
         this.wss = null;
+    // Watching relations: targetId -> Set of watcherIds, and watcherId -> targetId
+    this.watchersByTarget = new Map();
+    this.watchingByWatcher = new Map();
     }
 
     start() {
@@ -50,12 +53,41 @@ class MouffetteServer {
             
             ws.on('close', () => {
                 console.log(`📱 Client disconnected: ${clientId}`);
+                // Clean up watching relationships
+                const targetId = this.watchingByWatcher.get(clientId);
+                if (targetId) {
+                    this.watchingByWatcher.delete(clientId);
+                    const set = this.watchersByTarget.get(targetId);
+                    if (set) {
+                        set.delete(clientId);
+                        if (set.size === 0) this.watchersByTarget.delete(targetId);
+                    }
+                }
+                // Also remove as target from any watchers set
+                const watchers = this.watchersByTarget.get(clientId);
+                if (watchers) {
+                    this.watchersByTarget.delete(clientId);
+                }
                 this.clients.delete(clientId);
                 this.broadcastClientList();
             });
             
             ws.on('error', (error) => {
                 console.error(`❌ WebSocket error for client ${clientId}:`, error);
+                // Similar cleanup on error
+                const targetId = this.watchingByWatcher.get(clientId);
+                if (targetId) {
+                    this.watchingByWatcher.delete(clientId);
+                    const set = this.watchersByTarget.get(targetId);
+                    if (set) {
+                        set.delete(clientId);
+                        if (set.size === 0) this.watchersByTarget.delete(targetId);
+                    }
+                }
+                const watchers = this.watchersByTarget.get(clientId);
+                if (watchers) {
+                    this.watchersByTarget.delete(clientId);
+                }
                 this.clients.delete(clientId);
                 this.broadcastClientList();
             });
@@ -82,6 +114,12 @@ class MouffetteServer {
                 break;
             case 'request_screens':
                 this.handleRequestScreens(clientId, message);
+                break;
+            case 'watch_screens':
+                this.handleWatchScreens(clientId, message);
+                break;
+            case 'unwatch_screens':
+                this.handleUnwatchScreens(clientId, message);
                 break;
             case 'media_share':
                 this.handleMediaShare(clientId, message);
@@ -144,6 +182,8 @@ class MouffetteServer {
         
         // Broadcast updated client list
         this.broadcastClientList();
+    // Notify watchers of this target with fresh screens
+    this.notifyWatchersOfTarget(clientId);
     }
     
     sendClientList(clientId) {
@@ -230,6 +270,61 @@ class MouffetteServer {
             type: 'stop_media',
             senderId: senderId
         }));
+    }
+    
+    handleWatchScreens(watcherId, message) {
+        const targetId = message.targetClientId;
+        const watcher = this.clients.get(watcherId);
+        const target = this.clients.get(targetId);
+        if (!watcher || !target) return;
+        // Update maps
+        const prevTarget = this.watchingByWatcher.get(watcherId);
+        if (prevTarget && prevTarget !== targetId) {
+            const set = this.watchersByTarget.get(prevTarget);
+            if (set) {
+                set.delete(watcherId);
+                if (set.size === 0) this.watchersByTarget.delete(prevTarget);
+            }
+        }
+        this.watchingByWatcher.set(watcherId, targetId);
+        let set = this.watchersByTarget.get(targetId);
+        if (!set) {
+            set = new Set();
+            this.watchersByTarget.set(targetId, set);
+        }
+        set.add(watcherId);
+        // Immediately send the current screens to the watcher
+        this.handleRequestScreens(watcherId, { targetClientId: targetId });
+    }
+    
+    handleUnwatchScreens(watcherId, message) {
+        const targetId = message.targetClientId || this.watchingByWatcher.get(watcherId);
+        const set = this.watchersByTarget.get(targetId);
+        if (set) {
+            set.delete(watcherId);
+            if (set.size === 0) this.watchersByTarget.delete(targetId);
+        }
+        this.watchingByWatcher.delete(watcherId);
+    }
+    
+    notifyWatchersOfTarget(targetId) {
+        const set = this.watchersByTarget.get(targetId);
+        if (!set || set.size === 0) return;
+        const target = this.clients.get(targetId);
+        if (!target) return;
+        for (const watcherId of set) {
+            const watcher = this.clients.get(watcherId);
+            if (!watcher || !watcher.ws) continue;
+            watcher.ws.send(JSON.stringify({
+                type: 'screens_info',
+                clientInfo: {
+                    id: target.id,
+                    machineName: target.machineName,
+                    platform: target.platform,
+                    screens: target.screens
+                }
+            }));
+        }
     }
     
     getStats() {

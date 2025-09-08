@@ -122,6 +122,8 @@ private:
     void showClientListView();
     QWidget* createScreenWidget(const ScreenInfo& screen, int index);
     void updateVolumeIndicator();
+    void startWatchingSelectedClient();
+    void stopWatchingCurrentClient();
 
     // UI Components
     QWidget* m_centralWidget;
@@ -173,6 +175,7 @@ private:
     
     // Navigation state
     bool m_ignoreSelectionChange;
+    QString m_watchedClientId;
     
     // Constants
     static const QString DEFAULT_SERVER_URL;

@@ -107,6 +107,16 @@ void MainWindow::showScreenView(const ClientInfo& client) {
         m_screenCanvas->recenterWithMargin(33);
     }
     
+    // Start watching this client's screens for real-time updates
+    if (m_webSocketClient && m_webSocketClient->isConnected()) {
+        if (!m_watchedClientId.isEmpty() && m_watchedClientId != client.getId()) {
+            m_webSocketClient->unwatchScreens(m_watchedClientId);
+        }
+        if (!client.getId().isEmpty()) {
+            m_webSocketClient->watchScreens(client.getId());
+            m_watchedClientId = client.getId();
+        }
+    }
     qDebug() << "Screen view now showing. Current widget index:" << m_stackedWidget->currentIndex();
 }
 
@@ -118,6 +128,11 @@ void MainWindow::showClientListView() {
     
     qDebug() << "Client list view now showing. Current widget index:" << m_stackedWidget->currentIndex();
     
+    // Stop watching when leaving screen view
+    if (m_webSocketClient && m_webSocketClient->isConnected() && !m_watchedClientId.isEmpty()) {
+        m_webSocketClient->unwatchScreens(m_watchedClientId);
+        m_watchedClientId.clear();
+    }
     // Clear selection without triggering selection change event
     m_ignoreSelectionChange = true;
     m_clientListWidget->clearSelection();
@@ -768,6 +783,11 @@ void MainWindow::onDisconnected() {
     m_connectButton->setText("Connect to Server");
     m_refreshButton->setEnabled(false);
     
+    // Stop watching if any
+    if (!m_watchedClientId.isEmpty()) {
+        m_watchedClientId.clear();
+    }
+    
     // Clear client list
     m_availableClients.clear();
     updateClientList(m_availableClients);
@@ -776,6 +796,25 @@ void MainWindow::onDisconnected() {
     
     // Show tray notification
     showTrayMessage("Mouffette Disconnected", "Disconnected from Mouffette server");
+}
+
+void MainWindow::startWatchingSelectedClient() {
+    if (!m_webSocketClient || !m_webSocketClient->isConnected()) return;
+    const QString targetId = m_selectedClient.getId();
+    if (targetId.isEmpty()) return;
+    if (m_watchedClientId == targetId) return; // already watching
+    if (!m_watchedClientId.isEmpty()) {
+        m_webSocketClient->unwatchScreens(m_watchedClientId);
+    }
+    m_webSocketClient->watchScreens(targetId);
+    m_watchedClientId = targetId;
+}
+
+void MainWindow::stopWatchingCurrentClient() {
+    if (!m_webSocketClient || !m_webSocketClient->isConnected()) { m_watchedClientId.clear(); return; }
+    if (m_watchedClientId.isEmpty()) return;
+    m_webSocketClient->unwatchScreens(m_watchedClientId);
+    m_watchedClientId.clear();
 }
 
 void MainWindow::onConnectionError(const QString& error) {
