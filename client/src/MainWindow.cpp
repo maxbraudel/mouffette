@@ -507,19 +507,27 @@ void MainWindow::createScreenViewPage() {
     // Screen canvas
     m_screenCanvas = new ScreenCanvas();
     m_screenCanvas->setMinimumHeight(400);
+    m_screenCanvas->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     connect(m_screenCanvas, &ScreenCanvas::screenClicked, this, &MainWindow::onScreenClicked);
     // Ensure focus is on canvas, and block stray key events
     m_screenViewWidget->installEventFilter(this);
     m_screenCanvas->setFocusPolicy(Qt::StrongFocus);
     m_screenCanvas->installEventFilter(this);
-    m_screenViewLayout->addWidget(m_screenCanvas);
+    // Give canvas stretch so it occupies remaining space
+    m_screenViewLayout->addWidget(m_screenCanvas, 1);
     
     // Send button
     m_sendButton = new QPushButton("Send Media to All Screens");
     m_sendButton->setStyleSheet("QPushButton { padding: 12px 24px; font-weight: bold; background-color: #4a90e2; color: white; border-radius: 5px; }");
     m_sendButton->setEnabled(false); // Initially disabled until media is placed
     connect(m_sendButton, &QPushButton::clicked, this, &MainWindow::onSendMediaClicked);
-    m_screenViewLayout->addWidget(m_sendButton);
+    // Keep button at bottom, centered
+    m_screenViewLayout->addWidget(m_sendButton, 0, Qt::AlignHCenter);
+    // Ensure header/volume have no stretch, canvas expands, button fixed
+    m_screenViewLayout->setStretch(0, 0); // header
+    m_screenViewLayout->setStretch(1, 0); // volume indicator
+    m_screenViewLayout->setStretch(2, 1); // canvas expands
+    m_screenViewLayout->setStretch(3, 0); // button fixed
     
     // Add to stacked widget
     m_stackedWidget->addWidget(m_screenViewWidget);
