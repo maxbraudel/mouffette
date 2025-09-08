@@ -14,6 +14,9 @@ MainWindow::MainWindow(QWidget *parent)
     , m_webSocketClient(new WebSocketClient(this))
     , m_statusUpdateTimer(new QTimer(this))
     , m_trayIcon(nullptr)
+    , m_screenViewWidget(nullptr)
+    , m_screensScrollArea(nullptr)
+    , m_screensContainer(nullptr)
 {
     // Check if system tray is available
     if (!QSystemTrayIcon::isSystemTrayAvailable()) {
@@ -51,6 +54,148 @@ MainWindow::MainWindow(QWidget *parent)
     // Start minimized to tray and auto-connect
     hide();
     connectToServer();
+}
+
+void MainWindow::showScreenView(const ClientInfo& client) {
+    // Hide client list view
+    m_clientListLabel->hide();
+    m_clientListWidget->hide();
+    m_noClientsLabel->hide();
+    m_selectedClientLabel->hide();
+    
+    // Update client name
+    m_clientNameLabel->setText(QString("%1 (%2)").arg(client.getMachineName()).arg(client.getPlatform()));
+    
+    // Clear existing screens
+    QLayoutItem* item;
+    while ((item = m_screensLayout->takeAt(0))) {
+        if (item->widget()) {
+            delete item->widget();
+        }
+        delete item;
+    }
+    
+    // Add stretch at the beginning
+    m_screensLayout->addStretch();
+    
+    // Create screen widgets
+    const QList<ScreenInfo>& screens = client.getScreens();
+    for (int i = 0; i < screens.size(); ++i) {
+        QWidget* screenWidget = createScreenWidget(screens[i], i);
+        m_screensLayout->addWidget(screenWidget);
+    }
+    
+    // Add stretch at the end
+    m_screensLayout->addStretch();
+    
+    // Update volume indicator (placeholder for now)
+    updateVolumeIndicator();
+    
+    // Show screen view
+    m_screenViewWidget->show();
+}
+
+void MainWindow::showClientListView() {
+    // Hide screen view
+    m_screenViewWidget->hide();
+    
+    // Show client list view
+    m_clientListLabel->show();
+    if (m_availableClients.isEmpty()) {
+        m_noClientsLabel->show();
+        m_clientListWidget->hide();
+    } else {
+        m_noClientsLabel->hide();
+        m_clientListWidget->show();
+    }
+    
+    // Clear selection
+    m_clientListWidget->clearSelection();
+}
+
+QWidget* MainWindow::createScreenWidget(const ScreenInfo& screen, int index) {
+    QWidget* screenWidget = new QWidget();
+    screenWidget->setFixedSize(200, 150); // Fixed size for consistent display
+    screenWidget->setStyleSheet(
+        "QWidget { "
+        "   background-color: #2a2a2a; "
+        "   border: 2px solid #4a90e2; "
+        "   border-radius: 8px; "
+        "   margin: 5px; "
+        "} "
+        "QWidget:hover { "
+        "   border-color: #66a3ff; "
+        "   background-color: #3a3a3a; "
+        "}"
+    );
+    
+    QVBoxLayout* layout = new QVBoxLayout(screenWidget);
+    layout->setAlignment(Qt::AlignCenter);
+    
+    // Screen icon/representation
+    QLabel* screenIcon = new QLabel("🖥️");
+    screenIcon->setStyleSheet("QLabel { font-size: 48px; color: #4a90e2; }");
+    screenIcon->setAlignment(Qt::AlignCenter);
+    layout->addWidget(screenIcon);
+    
+    // Screen info
+    QString screenText = QString("Screen %1").arg(index + 1);
+    if (screen.primary) {
+        screenText += " (Primary)";
+    }
+    
+    QLabel* screenLabel = new QLabel(screenText);
+    screenLabel->setStyleSheet("QLabel { color: white; font-weight: bold; font-size: 12px; }");
+    screenLabel->setAlignment(Qt::AlignCenter);
+    layout->addWidget(screenLabel);
+    
+    QLabel* resolutionLabel = new QLabel(QString("%1 x %2").arg(screen.width).arg(screen.height));
+    resolutionLabel->setStyleSheet("QLabel { color: #cccccc; font-size: 10px; }");
+    resolutionLabel->setAlignment(Qt::AlignCenter);
+    layout->addWidget(resolutionLabel);
+    
+    // Make it clickable
+    screenWidget->installEventFilter(this);
+    screenWidget->setProperty("screenIndex", index);
+    screenWidget->setCursor(Qt::PointingHandCursor);
+    
+    return screenWidget;
+}
+
+void MainWindow::updateVolumeIndicator() {
+    // Placeholder implementation - in real app this would get actual volume
+    // For now, show medium volume as demonstration
+    m_volumeIndicator->setText("Volume: 🔉 Medium");
+}
+
+void MainWindow::onBackToClientListClicked() {
+    showClientListView();
+}
+
+void MainWindow::onSendMediaClicked() {
+    // Placeholder implementation
+    QMessageBox::information(this, "Send Media", 
+        QString("Sending media to %1's screens...\n\nThis feature will be implemented in the next phase.")
+        .arg(m_selectedClient.getMachineName()));
+}
+
+void MainWindow::onScreenClicked(int screenId) {
+    // Placeholder implementation
+    QMessageBox::information(this, "Screen Selected", 
+        QString("Selected screen %1 for media placement.\n\nIndividual screen editing will be implemented in the next phase.")
+        .arg(screenId + 1));
+}
+
+bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
+    if (event->type() == QEvent::MouseButtonPress) {
+        QWidget* widget = qobject_cast<QWidget*>(obj);
+        if (widget && widget->property("screenIndex").isValid()) {
+            int screenIndex = widget->property("screenIndex").toInt();
+            onScreenClicked(screenIndex);
+            return true;
+        }
+    }
+    return QMainWindow::eventFilter(obj, event);
 }
 
 MainWindow::~MainWindow() {
@@ -126,6 +271,57 @@ void MainWindow::setupUI() {
     m_selectedClientLabel->setWordWrap(true);
     m_selectedClientLabel->hide();
     m_mainLayout->addWidget(m_selectedClientLabel);
+    
+    // Screen view (initially hidden)
+    m_screenViewWidget = new QWidget();
+    m_screenViewLayout = new QVBoxLayout(m_screenViewWidget);
+    
+    // Client name and back button
+    QHBoxLayout* headerLayout = new QHBoxLayout();
+    m_backButton = new QPushButton("← Back to Client List");
+    m_backButton->setStyleSheet("QPushButton { padding: 8px 16px; font-weight: bold; }");
+    connect(m_backButton, &QPushButton::clicked, this, &MainWindow::onBackToClientListClicked);
+    
+    m_clientNameLabel = new QLabel();
+    m_clientNameLabel->setStyleSheet("QLabel { font-size: 16px; font-weight: bold; }");
+    
+    headerLayout->addWidget(m_backButton);
+    headerLayout->addStretch();
+    headerLayout->addWidget(m_clientNameLabel);
+    headerLayout->addStretch();
+    
+    m_screenViewLayout->addLayout(headerLayout);
+    
+    // Volume indicator
+    m_volumeIndicator = new QLabel("🔊 Volume: Medium");
+    m_volumeIndicator->setStyleSheet("QLabel { font-size: 14px; color: #333; padding: 5px; }");
+    m_volumeIndicator->setAlignment(Qt::AlignCenter);
+    m_screenViewLayout->addWidget(m_volumeIndicator);
+    
+    // Screens scroll area
+    m_screensScrollArea = new QScrollArea();
+    m_screensScrollArea->setWidgetResizable(true);
+    m_screensScrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_screensScrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_screensScrollArea->setMinimumHeight(300);
+    
+    m_screensContainer = new QWidget();
+    m_screensLayout = new QHBoxLayout(m_screensContainer);
+    m_screensLayout->setSpacing(20);
+    m_screensLayout->addStretch(); // Center the screens
+    
+    m_screensScrollArea->setWidget(m_screensContainer);
+    m_screenViewLayout->addWidget(m_screensScrollArea);
+    
+    // Send button
+    m_sendButton = new QPushButton("Send Media to All Screens");
+    m_sendButton->setStyleSheet("QPushButton { padding: 12px 24px; font-weight: bold; background-color: #4a90e2; color: white; border-radius: 5px; }");
+    m_sendButton->setEnabled(false); // Initially disabled until media is placed
+    connect(m_sendButton, &QPushButton::clicked, this, &MainWindow::onSendMediaClicked);
+    m_screenViewLayout->addWidget(m_sendButton);
+    
+    m_mainLayout->addWidget(m_screenViewWidget);
+    m_screenViewWidget->hide(); // Initially hidden
     
     // Initially show no clients message
     m_clientListWidget->hide();
@@ -320,32 +516,10 @@ void MainWindow::onClientSelectionChanged() {
         int index = m_clientListWidget->row(currentItem);
         if (index >= 0 && index < m_availableClients.size()) {
             const ClientInfo& client = m_availableClients[index];
+            m_selectedClient = client;
             
-            QString infoText = QString(
-                "<b>Selected Client:</b> %1<br/>"
-                "<b>Platform:</b> %2<br/>"
-                "<b>Screens:</b> %3<br/>"
-                "<b>Status:</b> %4"
-            ).arg(client.getMachineName())
-             .arg(client.getPlatform())
-             .arg(client.getScreenCount())
-             .arg(client.getStatus());
-            
-            // Add screen details
-            if (!client.getScreens().isEmpty()) {
-                infoText += "<br/><br/><b>Screen Details:</b><br/>";
-                for (int i = 0; i < client.getScreens().size(); ++i) {
-                    const ScreenInfo& screen = client.getScreens()[i];
-                    infoText += QString("Screen %1: %2x%3%4<br/>")
-                        .arg(i + 1)
-                        .arg(screen.width)
-                        .arg(screen.height)
-                        .arg(screen.primary ? " (Primary)" : "");
-                }
-            }
-            
-            m_selectedClientLabel->setText(infoText);
-            m_selectedClientLabel->show();
+            // Show the screen view for the selected client
+            showScreenView(client);
         }
     } else {
         m_selectedClientLabel->hide();
