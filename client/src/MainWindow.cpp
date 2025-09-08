@@ -768,13 +768,23 @@ void MainWindow::onTrayIconActivated(QSystemTrayIcon::ActivationReason reason) {
     case QSystemTrayIcon::Trigger:        // Single left-click
     case QSystemTrayIcon::DoubleClick:    // Double left-click  
     case QSystemTrayIcon::Context:        // Right-click
-        if (isVisible()) {
-            hide();
-        } else {
-            // Show the window
-            show();
-            raise();
-            activateWindow();
+        {
+            const bool minimized = (windowState() & Qt::WindowMinimized);
+            const bool hidden = isHidden() || !isVisible();
+            if (minimized || hidden) {
+                // Reveal and focus the window if minimized or hidden
+                if (minimized) {
+                    setWindowState(windowState() & ~Qt::WindowMinimized);
+                    showNormal();
+                } else {
+                    show();
+                }
+                raise();
+                activateWindow();
+            } else {
+                // Fully visible: toggle to hide to tray
+                hide();
+            }
         }
         break;
     default:
