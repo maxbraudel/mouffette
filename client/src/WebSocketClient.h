@@ -26,8 +26,6 @@ public:
     void requestScreens(const QString& targetClientId);
     void watchScreens(const QString& targetClientId);
     void unwatchScreens(const QString& targetClientId);
-    void watchScreens(const QString& targetClientId);
-    void unwatchScreens(const QString& targetClientId);
     
     // Getters
     QString getClientId() const { return m_clientId; }

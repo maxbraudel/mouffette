@@ -107,30 +107,8 @@ void WebSocketClient::watchScreens(const QString& targetClientId) {
 
 void WebSocketClient::unwatchScreens(const QString& targetClientId) {
     if (!isConnected()) {
-        qWarning() << "Cannot unwatch screens: not connected to server";
-        return;
-    }
-    QJsonObject message;
-    message["type"] = "unwatch_screens";
-    message["targetClientId"] = targetClientId;
-    sendMessage(message);
-}
-
-void WebSocketClient::watchScreens(const QString& targetClientId) {
-    if (!isConnected()) {
-        qWarning() << "Cannot watch screens: not connected to server";
-        return;
-    }
-    QJsonObject message;
-    message["type"] = "watch_screens";
-    message["targetClientId"] = targetClientId;
-    sendMessage(message);
-}
-
-void WebSocketClient::unwatchScreens(const QString& targetClientId) {
-    if (!isConnected()) {
-        // If not connected, nothing to unwatch on server
-        return;
+    qWarning() << "Cannot unwatch screens: not connected to server";
+    return;
     }
     QJsonObject message;
     message["type"] = "unwatch_screens";
