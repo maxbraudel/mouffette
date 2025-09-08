@@ -39,6 +39,7 @@ public:
     explicit ScreenCanvas(QWidget* parent = nullptr);
     void setScreens(const QList<ScreenInfo>& screens);
     void clearScreens();
+    void centerOnScreens(int margin = 33);
 
 signals:
     void screenClicked(int screenIndex);
@@ -48,6 +49,7 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
 
 private:
     QGraphicsScene* m_scene;

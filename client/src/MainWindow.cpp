@@ -5,6 +5,7 @@
 #include <QGuiApplication>
 #include <QDebug>
 #include <QCloseEvent>
+#include <QTimer>
 #include <algorithm>
 
 const QString MainWindow::DEFAULT_SERVER_URL = "ws://192.168.0.188:8080";
@@ -145,6 +146,9 @@ ScreenCanvas::ScreenCanvas(QWidget* parent)
     
     // Enable mouse tracking for panning
     setMouseTracking(true);
+    
+    // Enable keyboard focus for key events
+    setFocusPolicy(Qt::StrongFocus);
 }
 
 void ScreenCanvas::setScreens(const QList<ScreenInfo>& screens) {
@@ -159,8 +163,10 @@ void ScreenCanvas::setScreens(const QList<ScreenInfo>& screens) {
         QRectF sceneRect(-LARGE_SCENE_SIZE/2, -LARGE_SCENE_SIZE/2, LARGE_SCENE_SIZE, LARGE_SCENE_SIZE);
         m_scene->setSceneRect(sceneRect);
         
-        // Don't auto-fit, let user control the view
-        // fitInView(sceneRect, Qt::KeepAspectRatio);
+        // Delay centering to ensure the view is properly initialized
+        QTimer::singleShot(50, this, [this]() {
+            centerOnScreens();
+        });
     }
 }
 
@@ -171,6 +177,28 @@ void ScreenCanvas::clearScreens() {
         delete item;
     }
     m_screenItems.clear();
+}
+
+void ScreenCanvas::centerOnScreens(int margin) {
+    if (m_screenItems.isEmpty()) {
+        return;
+    }
+    
+    // Calculate bounding rect of all screen items
+    QRectF boundingRect;
+    for (QGraphicsRectItem* item : m_screenItems) {
+        if (boundingRect.isNull()) {
+            boundingRect = item->boundingRect().translated(item->pos());
+        } else {
+            boundingRect = boundingRect.united(item->boundingRect().translated(item->pos()));
+        }
+    }
+    
+    // Add margin to the bounding rect
+    boundingRect = boundingRect.adjusted(-margin, -margin, margin, margin);
+    
+    // Fit the view to show all screens with margin
+    fitInView(boundingRect, Qt::KeepAspectRatio);
 }
 
 void ScreenCanvas::createScreenItems() {
@@ -333,6 +361,16 @@ void ScreenCanvas::mouseReleaseEvent(QMouseEvent* event) {
         setCursor(Qt::ArrowCursor);
     }
     QGraphicsView::mouseReleaseEvent(event);
+}
+
+void ScreenCanvas::keyPressEvent(QKeyEvent* event) {
+    if (event->key() == Qt::Key_Space) {
+        // Recenter the view on screens when space is pressed
+        centerOnScreens();
+        event->accept();
+    } else {
+        QGraphicsView::keyPressEvent(event);
+    }
 }
 
 MainWindow::~MainWindow() {
