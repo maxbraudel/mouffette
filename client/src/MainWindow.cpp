@@ -5,6 +5,7 @@
 #include <QGuiApplication>
 #include <QDebug>
 #include <QCloseEvent>
+#include <QStackedWidget>
 #include <algorithm>
 
 const QString MainWindow::DEFAULT_SERVER_URL = "ws://192.168.0.188:8080";
@@ -17,6 +18,7 @@ MainWindow::MainWindow(QWidget *parent)
     , m_trayIcon(nullptr)
     , m_screenViewWidget(nullptr)
     , m_screenCanvas(nullptr)
+    , m_ignoreSelectionChange(false)
 {
     // Check if system tray is available
     if (!QSystemTrayIcon::isSystemTrayAvailable()) {
@@ -57,11 +59,7 @@ MainWindow::MainWindow(QWidget *parent)
 }
 
 void MainWindow::showScreenView(const ClientInfo& client) {
-    // Hide client list view
-    m_clientListLabel->hide();
-    m_clientListWidget->hide();
-    m_noClientsLabel->hide();
-    m_selectedClientLabel->hide();
+    qDebug() << "showScreenView called for client:" << client.getMachineName();
     
     // Update client name
     m_clientNameLabel->setText(QString("%1 (%2)").arg(client.getMachineName()).arg(client.getPlatform()));
@@ -72,26 +70,24 @@ void MainWindow::showScreenView(const ClientInfo& client) {
     // Update volume indicator (placeholder for now)
     updateVolumeIndicator();
     
-    // Show screen view
-    m_screenViewWidget->show();
+    // Switch to screen view page
+    m_stackedWidget->setCurrentWidget(m_screenViewWidget);
+    
+    qDebug() << "Screen view now showing. Current widget index:" << m_stackedWidget->currentIndex();
 }
 
 void MainWindow::showClientListView() {
-    // Hide screen view
-    m_screenViewWidget->hide();
+    qDebug() << "showClientListView called. Current widget index before:" << m_stackedWidget->currentIndex();
     
-    // Show client list view
-    m_clientListLabel->show();
-    if (m_availableClients.isEmpty()) {
-        m_noClientsLabel->show();
-        m_clientListWidget->hide();
-    } else {
-        m_noClientsLabel->hide();
-        m_clientListWidget->show();
-    }
+    // Switch to client list page
+    m_stackedWidget->setCurrentWidget(m_clientListPage);
     
-    // Clear selection
+    qDebug() << "Client list view now showing. Current widget index:" << m_stackedWidget->currentIndex();
+    
+    // Clear selection without triggering selection change event
+    m_ignoreSelectionChange = true;
     m_clientListWidget->clearSelection();
+    m_ignoreSelectionChange = false;
 }
 
 void MainWindow::updateVolumeIndicator() {
@@ -363,7 +359,7 @@ void MainWindow::setupUI() {
     m_mainLayout->setSpacing(20);
     m_mainLayout->setContentsMargins(20, 20, 20, 20);
     
-    // Connection section
+    // Connection section (always visible)
     m_connectionLayout = new QHBoxLayout();
     
     m_connectButton = new QPushButton("Connect to Server");
@@ -385,10 +381,30 @@ void MainWindow::setupUI() {
     
     m_mainLayout->addLayout(m_connectionLayout);
     
+    // Create stacked widget for page navigation
+    m_stackedWidget = new QStackedWidget();
+    m_mainLayout->addWidget(m_stackedWidget);
+    
+    // Create client list page
+    createClientListPage();
+    
+    // Create screen view page  
+    createScreenViewPage();
+    
+    // Start with client list page
+    m_stackedWidget->setCurrentWidget(m_clientListPage);
+}
+
+void MainWindow::createClientListPage() {
+    m_clientListPage = new QWidget();
+    QVBoxLayout* layout = new QVBoxLayout(m_clientListPage);
+    layout->setSpacing(15);
+    layout->setContentsMargins(0, 0, 0, 0);
+    
     // Client list section
     m_clientListLabel = new QLabel("Connected Clients:");
     m_clientListLabel->setStyleSheet("QLabel { font-size: 14px; font-weight: bold; }");
-    m_mainLayout->addWidget(m_clientListLabel);
+    layout->addWidget(m_clientListLabel);
     
     m_clientListWidget = new QListWidget();
     m_clientListWidget->setStyleSheet(
@@ -408,24 +424,35 @@ void MainWindow::setupUI() {
         "}"
     );
     connect(m_clientListWidget, &QListWidget::itemSelectionChanged, this, &MainWindow::onClientSelectionChanged);
-    m_mainLayout->addWidget(m_clientListWidget);
+    layout->addWidget(m_clientListWidget);
     
     m_noClientsLabel = new QLabel("No clients connected. Make sure other devices are running Mouffette and connected to the same server.");
     m_noClientsLabel->setStyleSheet("QLabel { color: #666; font-style: italic; text-align: center; }");
     m_noClientsLabel->setAlignment(Qt::AlignCenter);
     m_noClientsLabel->setWordWrap(true);
-    m_mainLayout->addWidget(m_noClientsLabel);
+    layout->addWidget(m_noClientsLabel);
     
     // Selected client info
     m_selectedClientLabel = new QLabel();
     m_selectedClientLabel->setStyleSheet("QLabel { background-color: #e8f4fd; padding: 10px; border-radius: 5px; }");
     m_selectedClientLabel->setWordWrap(true);
     m_selectedClientLabel->hide();
-    m_mainLayout->addWidget(m_selectedClientLabel);
+    layout->addWidget(m_selectedClientLabel);
     
-    // Screen view (initially hidden)
+    // Add to stacked widget
+    m_stackedWidget->addWidget(m_clientListPage);
+    
+    // Initially show no clients message
+    m_clientListWidget->hide();
+    m_noClientsLabel->show();
+}
+
+void MainWindow::createScreenViewPage() {
+    // Screen view page
     m_screenViewWidget = new QWidget();
     m_screenViewLayout = new QVBoxLayout(m_screenViewWidget);
+    m_screenViewLayout->setSpacing(15);
+    m_screenViewLayout->setContentsMargins(0, 0, 0, 0);
     
     // Client name and back button
     QHBoxLayout* headerLayout = new QHBoxLayout();
@@ -462,12 +489,8 @@ void MainWindow::setupUI() {
     connect(m_sendButton, &QPushButton::clicked, this, &MainWindow::onSendMediaClicked);
     m_screenViewLayout->addWidget(m_sendButton);
     
-    m_mainLayout->addWidget(m_screenViewWidget);
-    m_screenViewWidget->hide(); // Initially hidden
-    
-    // Initially show no clients message
-    m_clientListWidget->hide();
-    m_noClientsLabel->show();
+    // Add to stacked widget
+    m_stackedWidget->addWidget(m_screenViewWidget);
 }
 
 void MainWindow::setupMenuBar() {
@@ -652,6 +675,10 @@ void MainWindow::onRegistrationConfirmed(const ClientInfo& clientInfo) {
 }
 
 void MainWindow::onClientSelectionChanged() {
+    if (m_ignoreSelectionChange) {
+        return;
+    }
+    
     QListWidgetItem* currentItem = m_clientListWidget->currentItem();
     
     if (currentItem) {

@@ -24,6 +24,7 @@
 #include <QGestureEvent>
 #include <QPinchGesture>
 #include <QScrollBar>
+#include <QStackedWidget>
 #include "WebSocketClient.h"
 #include "ClientInfo.h"
 
@@ -95,6 +96,8 @@ protected:
 
 private:
     void setupUI();
+    void createClientListPage();
+    void createScreenViewPage();
     void setupMenuBar();
     void setupSystemTray();
     void connectToServer();
@@ -115,6 +118,10 @@ private:
     // UI Components
     QWidget* m_centralWidget;
     QVBoxLayout* m_mainLayout;
+    QStackedWidget* m_stackedWidget;
+    
+    // Client list page
+    QWidget* m_clientListPage;
     
     // Connection section
     QHBoxLayout* m_connectionLayout;
@@ -154,6 +161,9 @@ private:
     ClientInfo m_thisClient;
     ClientInfo m_selectedClient;
     QTimer* m_statusUpdateTimer;
+    
+    // Navigation state
+    bool m_ignoreSelectionChange;
     
     // Constants
     static const QString DEFAULT_SERVER_URL;
