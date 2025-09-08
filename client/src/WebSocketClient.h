@@ -23,6 +23,7 @@ public:
     // Client registration
     void registerClient(const QString& machineName, const QString& platform, const QList<ScreenInfo>& screens);
     void requestClientList();
+    void requestScreens(const QString& targetClientId);
     
     // Getters
     QString getClientId() const { return m_clientId; }
@@ -34,6 +35,7 @@ signals:
     void connectionError(const QString& error);
     void clientListReceived(const QList<ClientInfo>& clients);
     void registrationConfirmed(const ClientInfo& clientInfo);
+    void screensInfoReceived(const ClientInfo& clientInfo);
     void messageReceived(const QJsonObject& message);
 
 private slots:

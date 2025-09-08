@@ -83,6 +83,17 @@ void WebSocketClient::requestClientList() {
     sendMessage(message);
 }
 
+void WebSocketClient::requestScreens(const QString& targetClientId) {
+    if (!isConnected()) {
+        qWarning() << "Cannot request screens: not connected to server";
+        return;
+    }
+    QJsonObject message;
+    message["type"] = "request_screens";
+    message["targetClientId"] = targetClientId;
+    sendMessage(message);
+}
+
 void WebSocketClient::onConnected() {
     qDebug() << "Connected to server";
     setConnectionStatus("Connected");
@@ -174,6 +185,11 @@ void WebSocketClient::handleMessage(const QJsonObject& message) {
         }
         
         emit clientListReceived(clients);
+    }
+    else if (type == "screens_info") {
+        QJsonObject clientInfoObj = message["clientInfo"].toObject();
+        ClientInfo clientInfo = ClientInfo::fromJson(clientInfoObj);
+        emit screensInfoReceived(clientInfo);
     }
     else {
         // Forward unknown messages

@@ -92,6 +92,7 @@ private slots:
     void onBackToClientListClicked();
     void onSendMediaClicked();
     void onScreenClicked(int screenId);
+    void onScreensInfoReceived(const ClientInfo& clientInfo);
     
     // System tray slots
     void onTrayIconActivated(QSystemTrayIcon::ActivationReason reason);
@@ -107,7 +108,8 @@ private:
     void setupMenuBar();
     void setupSystemTray();
     void connectToServer();
-    void registerThisClient();
+    // Sync local display/machine info with the server (used on connect and on display changes)
+    void syncRegistration();
     QList<ScreenInfo> getLocalScreenInfo();
     QString getMachineName();
     QString getPlatformName();
@@ -167,6 +169,7 @@ private:
     ClientInfo m_thisClient;
     ClientInfo m_selectedClient;
     QTimer* m_statusUpdateTimer;
+    QTimer* m_displaySyncTimer;
     
     // Navigation state
     bool m_ignoreSelectionChange;

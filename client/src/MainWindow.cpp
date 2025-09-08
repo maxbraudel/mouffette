@@ -16,6 +16,7 @@ MainWindow::MainWindow(QWidget *parent)
     , m_centralWidget(nullptr)
     , m_webSocketClient(new WebSocketClient(this))
     , m_statusUpdateTimer(new QTimer(this))
+    , m_displaySyncTimer(new QTimer(this))
     , m_trayIcon(nullptr)
     , m_screenViewWidget(nullptr)
     , m_screenCanvas(nullptr)
@@ -37,11 +38,36 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_webSocketClient, &WebSocketClient::connectionError, this, &MainWindow::onConnectionError);
     connect(m_webSocketClient, &WebSocketClient::clientListReceived, this, &MainWindow::onClientListReceived);
     connect(m_webSocketClient, &WebSocketClient::registrationConfirmed, this, &MainWindow::onRegistrationConfirmed);
+    connect(m_webSocketClient, &WebSocketClient::screensInfoReceived, this, &MainWindow::onScreensInfoReceived);
+    connect(m_webSocketClient, &WebSocketClient::screensInfoReceived, this, &MainWindow::onScreensInfoReceived);
     
     // Setup status update timer
     m_statusUpdateTimer->setInterval(1000); // Update every second
     connect(m_statusUpdateTimer, &QTimer::timeout, this, &MainWindow::updateConnectionStatus);
     m_statusUpdateTimer->start();
+
+    // Debounced display sync timer
+    m_displaySyncTimer->setSingleShot(true);
+    m_displaySyncTimer->setInterval(300); // debounce bursts of screen change signals
+    connect(m_displaySyncTimer, &QTimer::timeout, this, [this]() {
+        if (m_webSocketClient->isConnected()) syncRegistration();
+    });
+
+    // Listen to display changes to keep server-side screen info up-to-date
+    auto connectScreenSignals = [this](QScreen* s) {
+        connect(s, &QScreen::geometryChanged, this, [this]() { m_displaySyncTimer->start(); });
+        connect(s, &QScreen::availableGeometryChanged, this, [this]() { m_displaySyncTimer->start(); });
+        connect(s, &QScreen::physicalDotsPerInchChanged, this, [this]() { m_displaySyncTimer->start(); });
+        connect(s, &QScreen::primaryOrientationChanged, this, [this]() { m_displaySyncTimer->start(); });
+    };
+    for (QScreen* s : QGuiApplication::screens()) connectScreenSignals(s);
+    connect(qApp, &QGuiApplication::screenAdded, this, [this, connectScreenSignals](QScreen* s) {
+        connectScreenSignals(s);
+        m_displaySyncTimer->start();
+    });
+    connect(qApp, &QGuiApplication::screenRemoved, this, [this](QScreen*) {
+        m_displaySyncTimer->start();
+    });
     
     setWindowTitle("Mouffette - Media Sharing");
     resize(600, 500);
@@ -65,8 +91,12 @@ void MainWindow::showScreenView(const ClientInfo& client) {
     // Update client name
     m_clientNameLabel->setText(QString("%1 (%2)").arg(client.getMachineName()).arg(client.getPlatform()));
     
-    // Set screens in the canvas
+    // Optimistic: show any cached screens quickly while fetching fresh data
     m_screenCanvas->setScreens(client.getScreens());
+    // Request fresh screen info on demand
+    if (!client.getId().isEmpty()) {
+        m_webSocketClient->requestScreens(client.getId());
+    }
     
     // Update volume indicator (placeholder for now)
     updateVolumeIndicator();
@@ -102,7 +132,12 @@ void MainWindow::onClientItemClicked(QListWidgetItem* item) {
     if (index >= 0 && index < m_availableClients.size()) {
         const ClientInfo& client = m_availableClients[index];
         m_selectedClient = client;
+        // Switch to screen view first with any cached info for immediate feedback
         showScreenView(client);
+        // Then request fresh screens info on-demand
+        if (m_webSocketClient && m_webSocketClient->isConnected()) {
+            m_webSocketClient->requestScreens(client.getId());
+        }
     }
 }
 
@@ -721,8 +756,8 @@ void MainWindow::onConnected() {
     m_connectButton->setText("Disconnect");
     m_refreshButton->setEnabled(true);
     
-    // Register this client
-    registerThisClient();
+    // Sync this client's info with the server
+    syncRegistration();
     
     statusBar()->showMessage("Connected to server", 3000);
     
@@ -797,20 +832,47 @@ void MainWindow::onClientSelectionChanged() {
             
             // Show the screen view for the selected client
             showScreenView(client);
+            if (m_webSocketClient && m_webSocketClient->isConnected()) {
+                m_webSocketClient->requestScreens(client.getId());
+            }
         }
     } else {
         m_selectedClientLabel->hide();
     }
 }
 
-void MainWindow::registerThisClient() {
+void MainWindow::onScreensInfoReceived(const ClientInfo& clientInfo) {
+    // Only update if this is for the currently selected client
+    if (clientInfo.getId() != m_selectedClient.getId()) return;
+    m_selectedClient.setScreens(clientInfo.getScreens());
+    if (m_screenCanvas) {
+        m_screenCanvas->setScreens(clientInfo.getScreens());
+        m_screenCanvas->recenterWithMargin(33);
+    }
+}
+
+void MainWindow::syncRegistration() {
     QString machineName = getMachineName();
     QString platform = getPlatformName();
     QList<ScreenInfo> screens = getLocalScreenInfo();
     
-    qDebug() << "Registering client:" << machineName << "on" << platform << "with" << screens.size() << "screens";
+    qDebug() << "Sync registration:" << machineName << "on" << platform << "with" << screens.size() << "screens";
     
     m_webSocketClient->registerClient(machineName, platform, screens);
+}
+
+void MainWindow::onScreensInfoReceived(const ClientInfo& clientInfo) {
+    // Update the canvas only if it matches the currently selected client
+    if (!clientInfo.getId().isEmpty() && clientInfo.getId() == m_selectedClient.getId()) {
+        qDebug() << "Updating canvas with fresh screens for" << clientInfo.getMachineName();
+        m_selectedClient = clientInfo; // keep selected client in sync
+        if (m_screenCanvas) {
+            m_screenCanvas->setScreens(clientInfo.getScreens());
+            m_screenCanvas->recenterWithMargin(33);
+        }
+        // Optional: refresh UI labels if platform/machine changed
+        m_clientNameLabel->setText(QString("%1 (%2)").arg(clientInfo.getMachineName()).arg(clientInfo.getPlatform()));
+    }
 }
 
 QList<ScreenInfo> MainWindow::getLocalScreenInfo() {

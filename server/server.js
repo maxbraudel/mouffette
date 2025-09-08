@@ -80,6 +80,9 @@ class MouffetteServer {
             case 'request_client_list':
                 this.sendClientList(clientId);
                 break;
+            case 'request_screens':
+                this.handleRequestScreens(clientId, message);
+                break;
             case 'media_share':
                 this.handleMediaShare(clientId, message);
                 break;
@@ -92,6 +95,30 @@ class MouffetteServer {
             default:
                 console.log(`⚠️ Unknown message type: ${message.type}`);
         }
+    }
+
+    handleRequestScreens(requesterId, message) {
+        const targetId = message.targetClientId;
+        const requester = this.clients.get(requesterId);
+        const target = this.clients.get(targetId);
+        if (!requester) return;
+        if (!target || !target.machineName) {
+            requester.ws.send(JSON.stringify({
+                type: 'error',
+                message: 'Target client not found or not registered'
+            }));
+            return;
+        }
+        // Reply with current known screens info for the target
+        requester.ws.send(JSON.stringify({
+            type: 'screens_info',
+            clientInfo: {
+                id: target.id,
+                machineName: target.machineName,
+                platform: target.platform,
+                screens: target.screens
+            }
+        }));
     }
     
     handleRegister(clientId, message) {
