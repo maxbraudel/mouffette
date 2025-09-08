@@ -55,10 +55,16 @@ private:
     QList<ScreenInfo> m_screens;
     bool m_panning;
     QPoint m_lastPanPoint;
+    double m_currentZoom;
+    static constexpr double MIN_ZOOM = 0.1;
+    static constexpr double MAX_ZOOM = 10.0;
     
     void createScreenItems();
     QGraphicsRectItem* createScreenItem(const ScreenInfo& screen, int index);
     QRectF calculateSceneRect() const;
+    void constrainZoom();
+    void constrainView();
+    QRectF getScreensBoundingRect() const;
 };
 
 class MainWindow : public QMainWindow {

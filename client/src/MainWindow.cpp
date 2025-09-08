@@ -134,6 +134,7 @@ ScreenCanvas::ScreenCanvas(QWidget* parent)
     : QGraphicsView(parent)
     , m_scene(new QGraphicsScene(this))
     , m_panning(false)
+    , m_currentZoom(1.0)
 {
     setScene(m_scene);
     setDragMode(QGraphicsView::NoDrag);
@@ -181,9 +182,38 @@ void ScreenCanvas::createScreenItems() {
 
 QGraphicsRectItem* ScreenCanvas::createScreenItem(const ScreenInfo& screen, int index) {
     const double SCALE_FACTOR = 0.2;
+    const double SCREEN_GAP = 3.0; // Small visual gap between adjacent screens
     
-    // Calculate scaled position and size while maintaining aspect ratio
-    QRectF rect(screen.x * SCALE_FACTOR, screen.y * SCALE_FACTOR, 
+    // Calculate position with minimal gaps for adjacent screens
+    double posX = screen.x * SCALE_FACTOR;
+    double posY = screen.y * SCALE_FACTOR;
+    
+    // For adjacent screens, minimize the gap
+    if (index > 0) {
+        for (int i = 0; i < index; i++) {
+            const ScreenInfo& otherScreen = m_screens[i];
+            
+            // Check if screens are horizontally adjacent (side by side)
+            if (qAbs(screen.y - otherScreen.y) <= 50) { // Same row (within 50px tolerance)
+                if (screen.x == otherScreen.x + otherScreen.width) { // Right of other screen
+                    posX = (otherScreen.x + otherScreen.width) * SCALE_FACTOR + SCREEN_GAP;
+                } else if (otherScreen.x == screen.x + screen.width) { // Left of other screen
+                    // Other screen positioning will handle this
+                }
+            }
+            
+            // Check if screens are vertically adjacent (stacked)
+            if (qAbs(screen.x - otherScreen.x) <= 50) { // Same column (within 50px tolerance)
+                if (screen.y == otherScreen.y + otherScreen.height) { // Below other screen
+                    posY = (otherScreen.y + otherScreen.height) * SCALE_FACTOR + SCREEN_GAP;
+                } else if (otherScreen.y == screen.y + screen.height) { // Above other screen
+                    // Other screen positioning will handle this
+                }
+            }
+        }
+    }
+    
+    QRectF rect(posX, posY, 
                 screen.width * SCALE_FACTOR, screen.height * SCALE_FACTOR);
     
     QGraphicsRectItem* item = new QGraphicsRectItem(rect);
@@ -248,16 +278,79 @@ QRectF ScreenCanvas::calculateSceneRect() const {
 }
 
 void ScreenCanvas::wheelEvent(QWheelEvent* event) {
-    // Zoom in/out with mouse wheel
+    // Handle both mouse wheel and trackpad gestures
+    if (event->angleDelta().isNull()) {
+        QGraphicsView::wheelEvent(event);
+        return;
+    }
+    
     const double scaleFactor = 1.15;
+    const QPointF centerPoint = mapToScene(event->position().toPoint());
+    
     if (event->angleDelta().y() > 0) {
         // Zoom in
-        scale(scaleFactor, scaleFactor);
+        if (m_currentZoom < MAX_ZOOM) {
+            scale(scaleFactor, scaleFactor);
+            m_currentZoom *= scaleFactor;
+        }
     } else {
         // Zoom out
-        scale(1.0 / scaleFactor, 1.0 / scaleFactor);
+        if (m_currentZoom > MIN_ZOOM) {
+            scale(1.0 / scaleFactor, 1.0 / scaleFactor);
+            m_currentZoom /= scaleFactor;
+        }
     }
+    
+    // Center zoom around the cursor position
+    centerOn(centerPoint);
+    constrainView();
     event->accept();
+}
+
+void ScreenCanvas::constrainZoom() {
+    if (m_currentZoom < MIN_ZOOM) {
+        double factor = MIN_ZOOM / m_currentZoom;
+        scale(factor, factor);
+        m_currentZoom = MIN_ZOOM;
+    } else if (m_currentZoom > MAX_ZOOM) {
+        double factor = MAX_ZOOM / m_currentZoom;
+        scale(factor, factor);
+        m_currentZoom = MAX_ZOOM;
+    }
+}
+
+void ScreenCanvas::constrainView() {
+    if (m_screens.isEmpty()) return;
+    
+    QRectF screensBounds = getScreensBoundingRect();
+    QRectF visibleArea = mapToScene(viewport()->rect()).boundingRect();
+    
+    // Add 20px margin around screens
+    const double MARGIN = 20.0;
+    screensBounds.adjust(-MARGIN, -MARGIN, MARGIN, MARGIN);
+    
+    // Ensure at least part of the screens is always visible
+    if (!visibleArea.intersects(screensBounds)) {
+        // If no screens are visible, center the view on the screens
+        centerOn(screensBounds.center());
+    }
+}
+
+QRectF ScreenCanvas::getScreensBoundingRect() const {
+    if (m_screenItems.isEmpty()) {
+        return QRectF();
+    }
+    
+    QRectF bounds = m_screenItems[0]->boundingRect();
+    bounds.translate(m_screenItems[0]->pos());
+    
+    for (QGraphicsRectItem* item : m_screenItems) {
+        QRectF itemBounds = item->boundingRect();
+        itemBounds.translate(item->pos());
+        bounds = bounds.united(itemBounds);
+    }
+    
+    return bounds;
 }
 
 void ScreenCanvas::mousePressEvent(QMouseEvent* event) {
@@ -283,11 +376,19 @@ void ScreenCanvas::mousePressEvent(QMouseEvent* event) {
 
 void ScreenCanvas::mouseMoveEvent(QMouseEvent* event) {
     if (m_panning) {
-        // Pan the view
+        // Pan the view using view transformation instead of scrollbars
         QPoint delta = event->pos() - m_lastPanPoint;
-        horizontalScrollBar()->setValue(horizontalScrollBar()->value() - delta.x());
-        verticalScrollBar()->setValue(verticalScrollBar()->value() - delta.y());
+        
+        // Convert to scene coordinates for smooth panning
+        QPointF sceneDelta = mapToScene(QPoint(0, 0)) - mapToScene(delta);
+        
+        // Apply the pan by translating the view
+        translate(sceneDelta.x(), sceneDelta.y());
+        
         m_lastPanPoint = event->pos();
+        
+        // Apply view constraints
+        constrainView();
     }
     QGraphicsView::mouseMoveEvent(event);
 }
