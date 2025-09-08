@@ -8,7 +8,15 @@
 #include <QKeyEvent>
 #include <QStackedWidget>
 #include <algorithm>
+#include <cmath>
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#endif
+#ifdef Q_OS_MACOS
 #include <QProcess>
+#endif
 
 const QString MainWindow::DEFAULT_SERVER_URL = "ws://192.168.0.188:8080";
 
@@ -627,7 +635,7 @@ void MainWindow::createScreenViewPage() {
     m_screenViewLayout->addLayout(headerLayout);
     
     // Volume indicator
-    m_volumeIndicator = new QLabel("🔊 Volume: Medium");
+    m_volumeIndicator = new QLabel("� Volume: --");
     // Use palette(window-text) so it remains readable in light/dark modes
     m_volumeIndicator->setStyleSheet("QLabel { font-size: 14px; color: palette(window-text); padding: 5px; }");
     m_volumeIndicator->setAlignment(Qt::AlignCenter);
@@ -969,7 +977,36 @@ int MainWindow::getSystemVolumePercent() {
     vol = std::clamp(vol, 0, 100);
     return vol;
 #elif defined(Q_OS_WIN)
-    return -1; // TODO: Implement with Windows audio APIs if needed
+    // Use Windows Core Audio APIs (MMDevice + IAudioEndpointVolume)
+    // Headers are included only on Windows builds.
+    #include <windows.h>
+    #include <mmdeviceapi.h>
+    #include <endpointvolume.h>
+    HRESULT hr;
+    IMMDeviceEnumerator* pEnum = nullptr;
+    IMMDevice* pDevice = nullptr;
+    IAudioEndpointVolume* pEndpointVol = nullptr;
+    bool coInit = SUCCEEDED(CoInitialize(nullptr));
+    int result = -1;
+    do {
+        hr = CoCreateInstance(CLSID_MMDeviceEnumerator, nullptr, CLSCTX_ALL, IID_IMMDeviceEnumerator, (void**)&pEnum);
+        if (FAILED(hr) || !pEnum) break;
+        hr = pEnum->GetDefaultAudioEndpoint(eRender, eMultimedia, &pDevice);
+        if (FAILED(hr) || !pDevice) break;
+        hr = pDevice->Activate(IID_IAudioEndpointVolume, CLSCTX_ALL, nullptr, (void**)&pEndpointVol);
+        if (FAILED(hr) || !pEndpointVol) break;
+        float volScalar = 0.0f;
+        hr = pEndpointVol->GetMasterVolumeLevelScalar(&volScalar);
+        if (FAILED(hr)) break;
+        int vol = static_cast<int>(std::round(volScalar * 100.0f));
+        vol = std::clamp(vol, 0, 100);
+        result = vol;
+    } while (false);
+    if (pEndpointVol) pEndpointVol->Release();
+    if (pDevice) pDevice->Release();
+    if (pEnum) pEnum->Release();
+    if (coInit) CoUninitialize();
+    return result;
 #elif defined(Q_OS_LINUX)
     return -1; // TODO: Implement via PulseAudio/PipeWire if needed
 #else

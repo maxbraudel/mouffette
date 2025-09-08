@@ -76,6 +76,11 @@ if(WIN32)
     else()
         message(STATUS "Building MouffetteClient with console subsystem (logs visible in terminal)")
     endif()
+    # Link Core Audio COM interfaces used for volume detection
+    target_link_libraries(MouffetteClient
+        ole32
+        uuid
+    )
 endif()
 
 if(APPLE)
