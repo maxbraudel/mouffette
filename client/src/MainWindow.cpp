@@ -830,7 +830,16 @@ void MainWindow::showSettingsDialog() {
     connect(saveBtn, &QPushButton::clicked, this, [this, urlEdit, &dialog]() {
         const QString newUrl = urlEdit->text().trimmed();
         if (!newUrl.isEmpty()) {
+            bool changed = (newUrl != (m_serverUrlConfig.isEmpty() ? DEFAULT_SERVER_URL : m_serverUrlConfig));
             m_serverUrlConfig = newUrl;
+            if (changed) {
+                // Restart connection to apply new server URL
+                if (m_webSocketClient->isConnected()) {
+                    m_userDisconnected = false; // this is not a manual disconnect, we want reconnect
+                    m_webSocketClient->disconnect();
+                }
+                connectToServer();
+            }
         }
         dialog.accept();
     });

@@ -22,6 +22,9 @@ WebSocketClient::~WebSocketClient() {
 
 void WebSocketClient::connectToServer(const QString& serverUrl) {
     if (m_webSocket) {
+        if (m_webSocket->state() == QAbstractSocket::ConnectedState || m_webSocket->state() == QAbstractSocket::ConnectingState) {
+            m_webSocket->close();
+        }
         m_webSocket->deleteLater();
     }
     
@@ -43,9 +46,10 @@ void WebSocketClient::disconnect() {
     m_userInitiatedDisconnect = true;
     m_reconnectTimer->stop();
     m_reconnectAttempts = 0;
-    
-    if (m_webSocket && m_webSocket->state() == QAbstractSocket::ConnectedState) {
-        m_webSocket->close();
+    if (m_webSocket) {
+        if (m_webSocket->state() == QAbstractSocket::ConnectedState || m_webSocket->state() == QAbstractSocket::ConnectingState) {
+            m_webSocket->close();
+        }
     }
 }
 
@@ -146,6 +150,7 @@ void WebSocketClient::onConnected() {
 
 void WebSocketClient::onDisconnected() {
     qDebug() << "Disconnected from server";
+    // If user initiated, keep status as Disconnected (no error, no reconnect)
     setConnectionStatus("Disconnected");
     emit disconnected();
     
@@ -155,8 +160,10 @@ void WebSocketClient::onDisconnected() {
         setConnectionStatus(QString("Reconnecting... (attempt %1/%2)").arg(m_reconnectAttempts).arg(MAX_RECONNECT_ATTEMPTS));
         m_reconnectTimer->start(RECONNECT_INTERVAL);
     } else {
-        setConnectionStatus("Connection failed");
-        emit connectionError("Failed to reconnect after multiple attempts");
+        if (!m_userInitiatedDisconnect) {
+            setConnectionStatus("Connection failed");
+            emit connectionError("Failed to reconnect after multiple attempts");
+        }
     }
 }
 
@@ -191,7 +198,11 @@ void WebSocketClient::onError(QAbstractSocket::SocketError error) {
         default:
             errorString = QString("Socket error: %1").arg(error);
     }
-    
+    // Suppress error status if this is a user-initiated disconnect flow
+    if (m_userInitiatedDisconnect) {
+        qDebug() << "Ignoring socket error due to user-initiated disconnect:" << errorString;
+        return;
+    }
     qWarning() << "WebSocket error:" << errorString;
     setConnectionStatus("Error: " + errorString);
     emit connectionError(errorString);
