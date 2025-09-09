@@ -484,12 +484,12 @@ bool ScreenCanvas::event(QEvent* event) {
             m_nativePinchGuardTimer->start();
             // ng->value() is a delta; use exponential to convert to multiplicative factor
             const qreal factor = std::pow(2.0, ng->value());
-            // Anchor at the gesture's actual position (ng->position is in view coords)
-            QPoint viewPos = ng->position().toPoint();
-            QPoint vpPos = viewport()->mapFrom(this, viewPos);
+            // Figma/Canva-style: anchor at the cursor position first
+            QPoint vpPos = viewport()->mapFromGlobal(QCursor::pos());
             if (!viewport()->rect().contains(vpPos)) {
-                // Fallbacks: cursor position, then last mouse position, then center
-                vpPos = viewport()->mapFromGlobal(QCursor::pos());
+                // Fallback to gesture position (view coords -> viewport) then last mouse pos/center
+                QPoint viewPos = ng->position().toPoint();
+                vpPos = viewport()->mapFrom(this, viewPos);
                 if (!viewport()->rect().contains(vpPos)) {
                     vpPos = m_lastMousePos.isNull() ? viewport()->rect().center() : m_lastMousePos;
                 }
@@ -619,15 +619,13 @@ void ScreenCanvas::zoomAroundViewportPos(const QPointF& vpPosF, qreal factor) {
     if (!viewport()->rect().contains(vpPos)) {
         vpPos = viewport()->rect().center();
     }
-    const QPointF before = mapToScene(vpPos);
-    const auto oldAnchor = transformationAnchor();
-    setTransformationAnchor(QGraphicsView::NoAnchor);
-    scale(factor, factor);
-    setTransformationAnchor(oldAnchor);
-    const QPointF after = mapToScene(vpPos);
-    const QPointF delta = after - before;
-    const QPointF currentCenter = mapToScene(viewport()->rect().center());
-    centerOn(currentCenter - delta);
+    const QPointF sceneAnchor = mapToScene(vpPos);
+    // Compose a new transform that scales around the scene anchor directly
+    QTransform t = transform();
+    t.translate(sceneAnchor.x(), sceneAnchor.y());
+    t.scale(factor, factor);
+    t.translate(-sceneAnchor.x(), -sceneAnchor.y());
+    setTransform(t);
 }
 
 MainWindow::~MainWindow() {
@@ -773,24 +771,24 @@ void MainWindow::createScreenViewPage() {
     m_screenViewLayout->setSpacing(15);
     m_screenViewLayout->setContentsMargins(0, 0, 0, 0);
     
-    // Client name header (no back button here anymore, it's in the top bar)
+    // Header row: hostname on the left, indicators on the right
     QHBoxLayout* headerLayout = new QHBoxLayout();
-    
+
     m_clientNameLabel = new QLabel();
     m_clientNameLabel->setStyleSheet("QLabel { font-size: 16px; font-weight: bold; }");
-    
-    headerLayout->addStretch();
-    headerLayout->addWidget(m_clientNameLabel);
-    headerLayout->addStretch();
-    
-    m_screenViewLayout->addLayout(headerLayout);
-    
-    // Volume indicator
+    m_clientNameLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+
     m_volumeIndicator = new QLabel("🔈 Volume: --");
     // Use palette(window-text) so it remains readable in light/dark modes
     m_volumeIndicator->setStyleSheet("QLabel { font-size: 14px; color: palette(window-text); padding: 5px; }");
-    m_volumeIndicator->setAlignment(Qt::AlignCenter);
-    m_screenViewLayout->addWidget(m_volumeIndicator);
+    m_volumeIndicator->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    m_volumeIndicator->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+
+    headerLayout->addWidget(m_clientNameLabel, 0, Qt::AlignLeft);
+    headerLayout->addStretch();
+    headerLayout->addWidget(m_volumeIndicator, 0, Qt::AlignRight);
+
+    m_screenViewLayout->addLayout(headerLayout);
     
     // Screen canvas
     m_screenCanvas = new ScreenCanvas();
@@ -811,11 +809,10 @@ void MainWindow::createScreenViewPage() {
     connect(m_sendButton, &QPushButton::clicked, this, &MainWindow::onSendMediaClicked);
     // Keep button at bottom, centered
     m_screenViewLayout->addWidget(m_sendButton, 0, Qt::AlignHCenter);
-    // Ensure header/volume have no stretch, canvas expands, button fixed
+    // Ensure header has no stretch, canvas expands, button fixed
     m_screenViewLayout->setStretch(0, 0); // header
-    m_screenViewLayout->setStretch(1, 0); // volume indicator
-    m_screenViewLayout->setStretch(2, 1); // canvas expands
-    m_screenViewLayout->setStretch(3, 0); // button fixed
+    m_screenViewLayout->setStretch(1, 1); // canvas expands
+    m_screenViewLayout->setStretch(2, 0); // button fixed
     
     // Add to stacked widget
     m_stackedWidget->addWidget(m_screenViewWidget);
