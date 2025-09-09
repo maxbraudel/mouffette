@@ -7,7 +7,7 @@
 #include <QCloseEvent>
 #include <QResizeEvent>
 #include <QKeyEvent>
-#include <QStackedWidget>
+#include <QStyleOption>
 #include <algorithm>
 #include <cmath>
 #include <QDialog>
@@ -17,7 +17,6 @@
 #include <QRandomGenerator>
 #include <QPainter>
 #include <QPaintEvent>
-#include <QStyleOption>
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -46,7 +45,12 @@ const QString MainWindow::DEFAULT_SERVER_URL = "ws://192.168.0.188:8080";
 class SpinnerWidget : public QWidget {
 public:
     explicit SpinnerWidget(QWidget* parent = nullptr)
-        : QWidget(parent), m_angle(0) {
+        : QWidget(parent)
+        , m_angle(0)
+        , m_radiusPx(24)      // default visual radius in pixels
+        , m_lineWidthPx(6)    // default line width
+        , m_color("#4a90e2") // default color matches Send button
+    {
         setAttribute(Qt::WA_TransparentForMouseEvents, true);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         m_timer = new QTimer(this);
@@ -60,6 +64,24 @@ public:
     void start() { if (!m_timer->isActive()) m_timer->start(); }
     void stop() { if (m_timer->isActive()) m_timer->stop(); }
 
+    // Customization knobs
+    void setRadius(int radiusPx) {
+        m_radiusPx = qMax(8, radiusPx);
+        updateGeometry();
+        update();
+    }
+    void setLineWidth(int px) {
+        m_lineWidthPx = qMax(1, px);
+        update();
+    }
+    void setColor(const QColor& c) {
+        m_color = c;
+        update();
+    }
+    int radius() const { return m_radiusPx; }
+    int lineWidth() const { return m_lineWidthPx; }
+    QColor color() const { return m_color; }
+
 protected:
     void paintEvent(QPaintEvent* event) override {
         Q_UNUSED(event);
@@ -71,15 +93,16 @@ protected:
         style()->drawPrimitive(QStyle::PE_Widget, &opt, &p, this);
 
     const int s = qMin(width(), height());
-    // Smaller radius: scale down compared to previous (from s/6 to s/10), with sane clamps
-    const int outer = qMax(28, qMin(s / 10, 56));   // spinner diameter
-    // Thicker line for stronger visual weight
-    const int thickness = qMax(5, outer / 8);
+    // Use configured radius but ensure it fits inside current widget size with padding
+    int outer = 2 * m_radiusPx;        // desired diameter from config
+    const int maxOuter = qMax(16, s - 12); // keep some padding to avoid clipping
+    outer = qMin(outer, maxOuter);
+    const int thickness = qMin(m_lineWidthPx, qMax(1, outer / 2)); // ensure sane bounds
 
         QPointF center(width() / 2.0, height() / 2.0);
         QRectF rect(center.x() - outer/2.0, center.y() - outer/2.0, outer, outer);
         
-    QColor arc("#4a90e2"); // Match Send button background
+    QColor arc = m_color;
     arc.setAlpha(230);
 
     // Flat caps (no rounded ends) as requested
@@ -98,6 +121,9 @@ protected:
 private:
     QTimer* m_timer;
     int m_angle;
+    int m_radiusPx;
+    int m_lineWidthPx;
+    QColor m_color;
 };
 
 MainWindow::MainWindow(QWidget *parent)
@@ -188,12 +214,12 @@ void MainWindow::showScreenView(const ClientInfo& client) {
     // Update client name
     m_clientNameLabel->setText(QString("%1 (%2)").arg(client.getMachineName()).arg(client.getPlatform()));
     
-    // Show loading spinner and hide canvas and volume while waiting for data
-    if (m_loadingSpinner) { m_loadingSpinner->show(); m_loadingSpinner->start(); }
+    // Switch container to spinner page; keep container visible
+    if (m_canvasStack) m_canvasStack->setCurrentIndex(0);
+    if (m_loadingSpinner) { m_loadingSpinner->start(); }
     if (m_volumeIndicator) m_volumeIndicator->hide();
     if (m_screenCanvas) {
         m_screenCanvas->clearScreens();
-        m_screenCanvas->hide();
     }
     
     // Request fresh screen info on demand
@@ -838,38 +864,58 @@ void MainWindow::createScreenViewPage() {
 
     m_screenViewLayout->addLayout(headerLayout);
     
-    // Loading spinner (initially hidden)
-    m_loadingSpinner = new SpinnerWidget();
-    m_loadingSpinner->setStyleSheet(
-        "SpinnerWidget { "
+    // Canvas container holds spinner and canvas with a stacked layout
+    m_canvasContainer = new QWidget();
+    m_canvasContainer->setObjectName("CanvasContainer");
+    m_canvasContainer->setMinimumHeight(400);
+    m_canvasContainer->setStyleSheet(
+        "QWidget#CanvasContainer { "
         "   border: 1px solid palette(mid); "
         "   border-radius: 5px; "
         "   background-color: palette(base); "
         "}"
     );
-    // Slightly smaller min height so the spinner doesn't feel oversized
-    m_loadingSpinner->setMinimumHeight(320);
-    m_loadingSpinner->hide();
-    m_screenViewLayout->addWidget(m_loadingSpinner, 1);
-    
-    // Canvas container with styling to match client list widget
+    QVBoxLayout* containerLayout = new QVBoxLayout(m_canvasContainer);
+    containerLayout->setContentsMargins(0,0,0,0);
+    containerLayout->setSpacing(0);
+    m_canvasStack = new QStackedWidget();
+    containerLayout->addWidget(m_canvasStack);
+
+    // Spinner page
+    m_loadingSpinner = new SpinnerWidget();
+    // Initial appearance (easy to tweak):
+    m_loadingSpinner->setRadius(22);        // circle radius in px
+    m_loadingSpinner->setLineWidth(6);      // line width in px
+    m_loadingSpinner->setColor(QColor("#4a90e2")); // brand blue
+    m_loadingSpinner->setMinimumSize(QSize(48, 48));
+    QWidget* spinnerPage = new QWidget();
+    QVBoxLayout* spinnerLayout = new QVBoxLayout(spinnerPage);
+    spinnerLayout->setContentsMargins(0,0,0,0);
+    spinnerLayout->setSpacing(0);
+    spinnerLayout->addStretch();
+    spinnerLayout->addWidget(m_loadingSpinner, 0, Qt::AlignCenter);
+    spinnerLayout->addStretch();
+
+    // Canvas page
+    QWidget* canvasPage = new QWidget();
+    QVBoxLayout* canvasLayout = new QVBoxLayout(canvasPage);
+    canvasLayout->setContentsMargins(0,0,0,0);
+    canvasLayout->setSpacing(0);
     m_screenCanvas = new ScreenCanvas();
     m_screenCanvas->setMinimumHeight(400);
     m_screenCanvas->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    m_screenCanvas->setStyleSheet(
-        "ScreenCanvas { "
-        "   border: 1px solid palette(mid); "
-        "   border-radius: 5px; "
-        "   background-color: palette(base); "
-        "}"
-    );
     connect(m_screenCanvas, &ScreenCanvas::screenClicked, this, &MainWindow::onScreenClicked);
+    canvasLayout->addWidget(m_screenCanvas);
+
+    // Add pages and container to main layout
+    m_canvasStack->addWidget(spinnerPage); // index 0: spinner
+    m_canvasStack->addWidget(canvasPage);  // index 1: canvas
+    m_screenViewLayout->addWidget(m_canvasContainer, 1);
+
     // Ensure focus is on canvas, and block stray key events
     m_screenViewWidget->installEventFilter(this);
     m_screenCanvas->setFocusPolicy(Qt::StrongFocus);
     m_screenCanvas->installEventFilter(this);
-    // Give canvas stretch so it occupies remaining space
-    m_screenViewLayout->addWidget(m_screenCanvas, 1);
     
     // Send button
     m_sendButton = new QPushButton("Send Media to All Screens");
@@ -878,11 +924,10 @@ void MainWindow::createScreenViewPage() {
     connect(m_sendButton, &QPushButton::clicked, this, &MainWindow::onSendMediaClicked);
     // Keep button at bottom, centered
     m_screenViewLayout->addWidget(m_sendButton, 0, Qt::AlignHCenter);
-    // Ensure header has no stretch, spinner/canvas expand, button fixed
+    // Ensure header has no stretch, container expands, button fixed
     m_screenViewLayout->setStretch(0, 0); // header
-    m_screenViewLayout->setStretch(1, 1); // spinner expands when visible
-    m_screenViewLayout->setStretch(2, 1); // canvas expands when visible
-    m_screenViewLayout->setStretch(3, 0); // button fixed
+    m_screenViewLayout->setStretch(1, 1); // container expands
+    m_screenViewLayout->setStretch(2, 0); // button fixed
     
     // Add to stacked widget
     m_stackedWidget->addWidget(m_screenViewWidget);
@@ -1238,11 +1283,11 @@ void MainWindow::onScreensInfoReceived(const ClientInfo& clientInfo) {
         qDebug() << "Updating canvas with fresh screens for" << clientInfo.getMachineName();
         m_selectedClient = clientInfo; // keep selected client in sync
         
-    // Hide loading spinner and show canvas and volume with fresh data
-    if (m_loadingSpinner) { m_loadingSpinner->hide(); m_loadingSpinner->stop(); }
+    // Switch to canvas page and stop spinner; show volume with fresh data
+    if (m_canvasStack) m_canvasStack->setCurrentIndex(1);
+    if (m_loadingSpinner) { m_loadingSpinner->stop(); }
         if (m_screenCanvas) {
             m_screenCanvas->setScreens(clientInfo.getScreens());
-            m_screenCanvas->show();
             m_screenCanvas->recenterWithMargin(33);
             m_screenCanvas->setFocus(Qt::OtherFocusReason);
         }

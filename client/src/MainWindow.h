@@ -36,6 +36,7 @@ class QMenu;
 QT_END_NAMESPACE
 
 class SpinnerWidget; // forward declaration for custom loading spinner
+// using QStackedWidget for canvas container switching
 
 // Custom screen canvas widget with zoom and pan capabilities
 class ScreenCanvas : public QGraphicsView {
@@ -165,6 +166,9 @@ private:
     QWidget* m_screenViewWidget;
     QVBoxLayout* m_screenViewLayout;
     QLabel* m_clientNameLabel;
+    // Canvas container keeps border visible; inside we switch between spinner and canvas
+    QWidget* m_canvasContainer;
+    QStackedWidget* m_canvasStack;
     ScreenCanvas* m_screenCanvas;
     QLabel* m_volumeIndicator;
     SpinnerWidget* m_loadingSpinner;
