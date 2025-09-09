@@ -201,7 +201,7 @@ public:
 
     QRectF boundingRect() const override {
         QRectF br(0, 0, m_baseSize.width(), m_baseSize.height());
-        qreal pad = m_selectionSize / 2.0;
+    qreal pad = toItemLengthFromPixels(m_selectionSize) / 2.0;
         return br.adjusted(-pad, -pad, pad, pad);
     }
 
@@ -209,7 +209,7 @@ public:
         QPainterPath path;
         QRectF br(0, 0, m_baseSize.width(), m_baseSize.height());
         path.addRect(br);
-        const qreal s = m_selectionSize;
+    const qreal s = toItemLengthFromPixels(m_selectionSize);
         path.addRect(QRectF(br.topLeft() - QPointF(s/2,s/2), QSizeF(s,s)));
         path.addRect(QRectF(QPointF(br.right(), br.top()) - QPointF(s/2,s/2), QSizeF(s,s)));
         path.addRect(QRectF(QPointF(br.left(), br.bottom()) - QPointF(s/2,s/2), QSizeF(s,s)));
@@ -252,7 +252,7 @@ protected:
             painter->drawRect(br);
             painter->restore();
             // Corner handles (visual squares)
-            const qreal s = m_visualSize;
+            const qreal s = toItemLengthFromPixels(m_visualSize);
             painter->setPen(QPen(QColor(74,144,226), 0));
             painter->setBrush(QBrush(Qt::white));
             painter->drawRect(QRectF(br.topLeft() - QPointF(s/2,s/2), QSizeF(s,s)));
@@ -325,13 +325,14 @@ private:
     QPointF m_fixedScenePoint; // scene coords
     qreal m_initialScale = 1.0;
     qreal m_initialGrabDist = 1.0;
+    // Desired sizes in device pixels (screen space)
     int m_visualSize = 8;
     int m_selectionSize = 12;
     bool m_cursorOverridden = false;
     Handle m_lastHoverHandle = None;
 
     Handle hitTestHandle(const QPointF& p) const {
-    const qreal s = m_selectionSize; // selection square centered on corners
+        const qreal s = toItemLengthFromPixels(m_selectionSize); // selection square centered on corners
         QRectF br(0, 0, m_baseSize.width(), m_baseSize.height());
     if (QRectF(br.topLeft() - QPointF(s/2,s/2), QSizeF(s,s)).contains(p)) return TopLeft;
     if (QRectF(QPointF(br.right(), br.top()) - QPointF(s/2,s/2), QSizeF(s,s)).contains(p)) return TopRight;
@@ -379,6 +380,17 @@ private:
             case BottomRight: return QPointF(m_baseSize.width(), m_baseSize.height());
             default: return QPointF(0,0);
         }
+    }
+
+    qreal toItemLengthFromPixels(int px) const {
+        if (!scene() || scene()->views().isEmpty()) return px; // fallback
+        QGraphicsView* v = scene()->views().first();
+        QTransform itemToViewport = v->viewportTransform() * sceneTransform();
+        // Effective scale along X (uniform expected)
+        qreal sx = std::hypot(itemToViewport.m11(), itemToViewport.m21());
+        if (sx <= 1e-6) return px;
+        // Convert device pixels to item units
+        return px / sx;
     }
 };
 
@@ -1035,6 +1047,9 @@ void ScreenCanvas::mousePressEvent(QMouseEvent* event) {
         // If clicking any item (but not on a handle), let the scene handle selection/move; only pan on empty space
         // (fallthrough)
         // Otherwise start panning the view
+        if (m_scene) {
+            m_scene->clearSelection(); // single-click on empty space deselects items
+        }
         m_panning = true;
         m_lastPanPoint = event->pos();
         setCursor(Qt::ClosedHandCursor);
