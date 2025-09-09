@@ -24,6 +24,9 @@
 #include <QDragMoveEvent>
 #include <QMimeData>
 #include <QGraphicsPixmapItem>
+#include <QGraphicsSceneMouseEvent>
+#include <QPen>
+#include <QBrush>
 #include <QUrl>
 #include <QImage>
 #include <QPixmap>
@@ -141,6 +144,207 @@ private:
     int m_radiusPx;
     int m_lineWidthPx;
     QColor m_color;
+};
+
+// Resizable, movable pixmap item with corner handles; keeps aspect ratio
+class ResizablePixmapItem : public QGraphicsPixmapItem {
+public:
+    explicit ResizablePixmapItem(const QPixmap& pm, int visualSizePx, int selectionSizePx)
+        : QGraphicsPixmapItem(pm)
+    {
+        m_visualSize = qMax(4, visualSizePx);
+        m_selectionSize = qMax(m_visualSize, selectionSizePx);
+        setFlags(QGraphicsItem::ItemIsMovable | QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemSendsGeometryChanges);
+        m_baseSize = pm.size();
+        setScale(1.0);
+        setZValue(1.0);
+    }
+    // Utility for view: tell if a given item-space pos is on a resize handle
+    bool isOnHandleAtItemPos(const QPointF& itemPos) const {
+        return hitTestHandle(itemPos) != None;
+    }
+
+    // Start a resize operation given a scene position; returns true if a handle was engaged
+    bool beginResizeAtScenePos(const QPointF& scenePos) {
+        Handle h = hitTestHandle(mapFromScene(scenePos));
+        if (h == None) return false;
+        m_activeHandle = h;
+        m_fixedItemPoint = handlePoint(opposite(m_activeHandle));
+        m_fixedScenePoint = mapToScene(m_fixedItemPoint);
+        m_diagLen = std::hypot(m_baseSize.width(), m_baseSize.height());
+        grabMouse();
+        return true;
+    }
+
+    void setHandleVisualSize(int px) {
+        int newVisual = qMax(4, px);
+        int newSelection = qMax(m_selectionSize, newVisual);
+        if (newSelection != m_selectionSize) {
+            prepareGeometryChange();
+            m_selectionSize = newSelection;
+        }
+        m_visualSize = newVisual;
+        update();
+    }
+    void setHandleSelectionSize(int px) {
+        int newSel = qMax(4, px);
+        if (newSel != m_selectionSize) {
+            prepareGeometryChange();
+            m_selectionSize = newSel;
+            update();
+        }
+    }
+
+    QRectF boundingRect() const override {
+        QRectF br(0, 0, m_baseSize.width(), m_baseSize.height());
+        qreal pad = m_selectionSize / 2.0;
+        return br.adjusted(-pad, -pad, pad, pad);
+    }
+
+    QPainterPath shape() const override {
+        QPainterPath path;
+        QRectF br(0, 0, m_baseSize.width(), m_baseSize.height());
+        path.addRect(br);
+        const qreal s = m_selectionSize;
+        path.addRect(QRectF(br.topLeft() - QPointF(s/2,s/2), QSizeF(s,s)));
+        path.addRect(QRectF(QPointF(br.right(), br.top()) - QPointF(s/2,s/2), QSizeF(s,s)));
+        path.addRect(QRectF(QPointF(br.left(), br.bottom()) - QPointF(s/2,s/2), QSizeF(s,s)));
+        path.addRect(QRectF(br.bottomRight() - QPointF(s/2,s/2), QSizeF(s,s)));
+        return path;
+    }
+
+protected:
+    void paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget* widget) override {
+        Q_UNUSED(option);
+        Q_UNUSED(widget);
+        // Draw the pixmap ourselves to avoid default selection border around boundingRect
+        if (!pixmap().isNull()) {
+            painter->drawPixmap(QPointF(0, 0), pixmap());
+        }
+        // Draw a tight selection border hugging the image only
+        if (isSelected()) {
+            QRectF br(0, 0, m_baseSize.width(), m_baseSize.height());
+            painter->save();
+            painter->setBrush(Qt::NoBrush);
+            // Striped effect: alternate white and blue dashes
+            QPen whitePen(QColor(255,255,255));
+            whitePen.setCosmetic(true);
+            whitePen.setWidth(1);
+            whitePen.setStyle(Qt::DashLine);
+            whitePen.setDashPattern(QVector<qreal>({4, 4}));
+            whitePen.setCapStyle(Qt::FlatCap);
+            whitePen.setJoinStyle(Qt::MiterJoin);
+            painter->setPen(whitePen);
+            painter->drawRect(br);
+            QPen bluePen(QColor(74,144,226));
+            bluePen.setCosmetic(true);
+            bluePen.setWidth(1);
+            bluePen.setStyle(Qt::DashLine);
+            bluePen.setDashPattern(QVector<qreal>({4, 4}));
+            bluePen.setDashOffset(4); // shift to interleave with white
+            bluePen.setCapStyle(Qt::FlatCap);
+            bluePen.setJoinStyle(Qt::MiterJoin);
+            painter->setPen(bluePen);
+            painter->drawRect(br);
+            painter->restore();
+            // Corner handles (visual squares)
+            const qreal s = m_visualSize;
+            painter->setPen(QPen(QColor(74,144,226), 0));
+            painter->setBrush(QBrush(Qt::white));
+            painter->drawRect(QRectF(br.topLeft() - QPointF(s/2,s/2), QSizeF(s,s)));
+            painter->drawRect(QRectF(QPointF(br.right(), br.top()) - QPointF(s/2,s/2), QSizeF(s,s)));
+            painter->drawRect(QRectF(QPointF(br.left(), br.bottom()) - QPointF(s/2,s/2), QSizeF(s,s)));
+            painter->drawRect(QRectF(br.bottomRight() - QPointF(s/2,s/2), QSizeF(s,s)));
+        }
+    }
+
+    void mousePressEvent(QGraphicsSceneMouseEvent* event) override {
+        m_activeHandle = hitTestHandle(event->pos());
+        if (m_activeHandle != None) {
+            m_fixedItemPoint = handlePoint(opposite(m_activeHandle));
+            m_fixedScenePoint = mapToScene(m_fixedItemPoint);
+            m_diagLen = std::hypot(m_baseSize.width(), m_baseSize.height());
+            event->accept();
+            return;
+        }
+        QGraphicsPixmapItem::mousePressEvent(event);
+    }
+
+    void mouseMoveEvent(QGraphicsSceneMouseEvent* event) override {
+        if (m_activeHandle != None) {
+            const QPointF v = event->scenePos() - m_fixedScenePoint;
+            qreal newScale = std::hypot(v.x(), v.y()) / (m_diagLen > 0 ? m_diagLen : 1.0);
+            newScale = std::clamp<qreal>(newScale, 0.05, 100.0);
+            setScale(newScale);
+            setPos(m_fixedScenePoint - newScale * m_fixedItemPoint);
+            event->accept();
+            return;
+        }
+        // Update cursor on hover near handles
+        switch (hitTestHandle(event->pos())) {
+            case TopLeft:
+            case BottomRight:
+                QApplication::setOverrideCursor(Qt::SizeFDiagCursor);
+                break;
+            case TopRight:
+            case BottomLeft:
+                QApplication::setOverrideCursor(Qt::SizeBDiagCursor);
+                break;
+            default:
+                QApplication::restoreOverrideCursor();
+                break;
+        }
+        QGraphicsPixmapItem::mouseMoveEvent(event);
+    }
+
+    void mouseReleaseEvent(QGraphicsSceneMouseEvent* event) override {
+        if (m_activeHandle != None) {
+            m_activeHandle = None;
+            QApplication::restoreOverrideCursor();
+            ungrabMouse();
+            event->accept();
+            return;
+        }
+        QGraphicsPixmapItem::mouseReleaseEvent(event);
+    }
+
+private:
+    enum Handle { None, TopLeft, TopRight, BottomLeft, BottomRight };
+    QSize m_baseSize;
+    Handle m_activeHandle = None;
+    QPointF m_fixedItemPoint;  // item coords
+    QPointF m_fixedScenePoint; // scene coords
+    qreal m_diagLen = 1.0;
+    int m_visualSize = 8;
+    int m_selectionSize = 12;
+
+    Handle hitTestHandle(const QPointF& p) const {
+    const qreal s = m_selectionSize; // selection square centered on corners
+        QRectF br(0, 0, m_baseSize.width(), m_baseSize.height());
+    if (QRectF(br.topLeft() - QPointF(s/2,s/2), QSizeF(s,s)).contains(p)) return TopLeft;
+    if (QRectF(QPointF(br.right(), br.top()) - QPointF(s/2,s/2), QSizeF(s,s)).contains(p)) return TopRight;
+    if (QRectF(QPointF(br.left(), br.bottom()) - QPointF(s/2,s/2), QSizeF(s,s)).contains(p)) return BottomLeft;
+    if (QRectF(br.bottomRight() - QPointF(s/2,s/2), QSizeF(s,s)).contains(p)) return BottomRight;
+        return None;
+    }
+    Handle opposite(Handle h) const {
+        switch (h) {
+            case TopLeft: return BottomRight;
+            case TopRight: return BottomLeft;
+            case BottomLeft: return TopRight;
+            case BottomRight: return TopLeft;
+            default: return None;
+        }
+    }
+    QPointF handlePoint(Handle h) const {
+        switch (h) {
+            case TopLeft: return QPointF(0,0);
+            case TopRight: return QPointF(m_baseSize.width(), 0);
+            case BottomLeft: return QPointF(0, m_baseSize.height());
+            case BottomRight: return QPointF(m_baseSize.width(), m_baseSize.height());
+            default: return QPointF(0,0);
+        }
+    }
 };
 
 MainWindow::MainWindow(QWidget *parent)
@@ -502,6 +706,31 @@ void ScreenCanvas::ensureZOrder() {
     if (m_remoteCursorDot) m_remoteCursorDot->setZValue(10000.0);
 }
 
+void ScreenCanvas::setMediaHandleSelectionSizePx(int px) {
+    m_mediaHandleSelectionSizePx = qMax(4, px);
+    if (!m_scene) return;
+    for (QGraphicsItem* it : m_scene->items()) {
+        if (auto* rp = dynamic_cast<ResizablePixmapItem*>(it)) {
+            rp->setHandleSelectionSize(m_mediaHandleSelectionSizePx);
+        }
+    }
+}
+
+void ScreenCanvas::setMediaHandleVisualSizePx(int px) {
+    m_mediaHandleVisualSizePx = qMax(4, px);
+    if (!m_scene) return;
+    for (QGraphicsItem* it : m_scene->items()) {
+        if (auto* rp = dynamic_cast<ResizablePixmapItem*>(it)) {
+            rp->setHandleVisualSize(m_mediaHandleVisualSizePx);
+        }
+    }
+}
+
+void ScreenCanvas::setMediaHandleSizePx(int px) {
+    setMediaHandleVisualSizePx(px);
+    setMediaHandleSelectionSizePx(px);
+}
+
 // Drag & drop handlers
 void ScreenCanvas::dragEnterEvent(QDragEnterEvent* event) {
     if (event->mimeData()->hasUrls() || event->mimeData()->hasImage()) {
@@ -538,7 +767,7 @@ void ScreenCanvas::dropEvent(QDropEvent* event) {
     // Create pixmap item; scale dimensions from device pixels to scene units using m_scaleFactor
     const double w = image.width() * m_scaleFactor;
     const double h = image.height() * m_scaleFactor;
-    QGraphicsPixmapItem* item = new QGraphicsPixmapItem(QPixmap::fromImage(image));
+    QGraphicsPixmapItem* item = new ResizablePixmapItem(QPixmap::fromImage(image), m_mediaHandleVisualSizePx, m_mediaHandleSelectionSizePx);
     item->setFlags(QGraphicsItem::ItemIsMovable | QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemSendsGeometryChanges);
     // Position at drop scene position, centering the image
     const QPointF scenePos = mapToScene(event->position().toPoint());
@@ -745,17 +974,37 @@ bool ScreenCanvas::gestureEvent(QGestureEvent* event) {
 
 void ScreenCanvas::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
-        // If clicking a movable item (e.g., dropped image), let the scene handle item drag
-        if (QGraphicsItem* item = itemAt(event->pos())) {
-            if (item->flags().testFlag(QGraphicsItem::ItemIsMovable)) {
-                QGraphicsView::mousePressEvent(event);
+        // Try to start resize on the topmost media item whose handle contains the point
+        const QPointF scenePos = mapToScene(event->pos());
+        ResizablePixmapItem* topHandleItem = nullptr;
+        qreal topZ = -std::numeric_limits<qreal>::infinity();
+        for (QGraphicsItem* it : m_scene->items()) {
+            if (auto* rp = dynamic_cast<ResizablePixmapItem*>(it)) {
+                if (rp->isOnHandleAtItemPos(rp->mapFromScene(scenePos))) {
+                    if (rp->zValue() > topZ) { topZ = rp->zValue(); topHandleItem = rp; }
+                }
+            }
+        }
+        if (topHandleItem) {
+            topHandleItem->setSelected(true);
+            if (topHandleItem->beginResizeAtScenePos(scenePos)) {
+                event->accept();
                 return;
             }
         }
+        // If clicking over an item, try normal scene behavior (select/move)
+        const QList<QGraphicsItem*> hitItems = items(event->pos());
+        for (QGraphicsItem* it : hitItems) {
+            if (it) { QGraphicsView::mousePressEvent(event); return; }
+        }
+        // If clicking any item (but not on a handle), let the scene handle selection/move; only pan on empty space
+        // (fallthrough)
         // Otherwise start panning the view
         m_panning = true;
         m_lastPanPoint = event->pos();
         setCursor(Qt::ClosedHandCursor);
+        event->accept();
+        return;
     }
     QGraphicsView::mousePressEvent(event);
 }
@@ -763,6 +1012,13 @@ void ScreenCanvas::mousePressEvent(QMouseEvent* event) {
 void ScreenCanvas::mouseMoveEvent(QMouseEvent* event) {
     // Track last mouse pos in viewport coords (used for zoom anchoring)
     m_lastMousePos = event->pos();
+    // If dragging with left button over any item, delegate to scene; only pan when empty space
+    if (event->buttons() & Qt::LeftButton) {
+    if (!items(event->pos()).isEmpty()) {
+            QGraphicsView::mouseMoveEvent(event);
+            return;
+        }
+    }
     if (m_panning) {
         // Pan the view
         QPoint delta = event->pos() - m_lastPanPoint;
@@ -778,6 +1034,8 @@ void ScreenCanvas::mouseReleaseEvent(QMouseEvent* event) {
         if (m_panning) {
             m_panning = false;
             setCursor(Qt::ArrowCursor);
+            event->accept();
+            return;
         }
     }
     QGraphicsView::mouseReleaseEvent(event);

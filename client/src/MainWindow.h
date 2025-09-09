@@ -53,6 +53,11 @@ public:
     // Remote cursor visualization
     void updateRemoteCursor(int globalX, int globalY);
     void hideRemoteCursor();
+    // Config: sizes of media resize handles (px, item coordinates)
+    void setMediaHandleSelectionSizePx(int px); // hit area for grabbing
+    void setMediaHandleVisualSizePx(int px);    // drawn square size
+    // Back-compat helper: set both at once
+    void setMediaHandleSizePx(int px);
 
 signals:
 
@@ -83,6 +88,9 @@ private:
     QGraphicsEllipseItem* m_remoteCursorDot = nullptr;
     // Unified scale factor used to lay out screens and to scale dropped media (scene pixels per device pixel)
     double m_scaleFactor = 0.2;
+    // Resize handle sizes for media items
+    int m_mediaHandleSelectionSizePx = 100; // large hit area by default
+    int m_mediaHandleVisualSizePx = 12;     // smaller visual indicator
     
     void createScreenItems();
     QGraphicsRectItem* createScreenItem(const ScreenInfo& screen, int index, const QRectF& position);
