@@ -171,7 +171,10 @@ public:
         m_activeHandle = h;
         m_fixedItemPoint = handlePoint(opposite(m_activeHandle));
         m_fixedScenePoint = mapToScene(m_fixedItemPoint);
-        m_diagLen = std::hypot(m_baseSize.width(), m_baseSize.height());
+    m_initialScale = scale();
+    const qreal d = std::hypot(scenePos.x() - m_fixedScenePoint.x(),
+                   scenePos.y() - m_fixedScenePoint.y());
+    m_initialGrabDist = (d > 1e-6) ? d : 1e-6;
         grabMouse();
         return true;
     }
@@ -263,7 +266,11 @@ protected:
         if (m_activeHandle != None) {
             m_fixedItemPoint = handlePoint(opposite(m_activeHandle));
             m_fixedScenePoint = mapToScene(m_fixedItemPoint);
-            m_diagLen = std::hypot(m_baseSize.width(), m_baseSize.height());
+            // Capture initial state so scaling starts from current cursor distance (no jump)
+            m_initialScale = scale();
+            const qreal d = std::hypot(event->scenePos().x() - m_fixedScenePoint.x(),
+                                       event->scenePos().y() - m_fixedScenePoint.y());
+            m_initialGrabDist = (d > 1e-6) ? d : 1e-6;
             event->accept();
             return;
         }
@@ -273,7 +280,8 @@ protected:
     void mouseMoveEvent(QGraphicsSceneMouseEvent* event) override {
         if (m_activeHandle != None) {
             const QPointF v = event->scenePos() - m_fixedScenePoint;
-            qreal newScale = std::hypot(v.x(), v.y()) / (m_diagLen > 0 ? m_diagLen : 1.0);
+            const qreal currDist = std::hypot(v.x(), v.y());
+            qreal newScale = m_initialScale * (currDist / (m_initialGrabDist > 0 ? m_initialGrabDist : 1e-6));
             newScale = std::clamp<qreal>(newScale, 0.05, 100.0);
             setScale(newScale);
             setPos(m_fixedScenePoint - newScale * m_fixedItemPoint);
@@ -314,7 +322,8 @@ private:
     Handle m_activeHandle = None;
     QPointF m_fixedItemPoint;  // item coords
     QPointF m_fixedScenePoint; // scene coords
-    qreal m_diagLen = 1.0;
+    qreal m_initialScale = 1.0;
+    qreal m_initialGrabDist = 1.0;
     int m_visualSize = 8;
     int m_selectionSize = 12;
 
