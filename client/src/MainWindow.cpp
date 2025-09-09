@@ -19,6 +19,14 @@
 #include <QPaintEvent>
 #include <QGraphicsOpacityEffect>
 #include <QPropertyAnimation>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QDragMoveEvent>
+#include <QMimeData>
+#include <QGraphicsPixmapItem>
+#include <QUrl>
+#include <QImage>
+#include <QPixmap>
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -343,12 +351,7 @@ void MainWindow::onSendMediaClicked() {
         .arg(m_selectedClient.getMachineName()));
 }
 
-void MainWindow::onScreenClicked(int screenId) {
-    // Placeholder implementation
-    QMessageBox::information(this, "Screen Selected", 
-        QString("Selected screen %1 for media placement.\n\nIndividual screen editing will be implemented in the next phase.")
-        .arg(screenId + 1));
-}
+
 
 bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
     // Swallow spacebar outside of the canvas to prevent accidental activations,
@@ -389,6 +392,8 @@ ScreenCanvas::ScreenCanvas(QWidget* parent)
     setTransformationAnchor(QGraphicsView::NoAnchor);
     // When the view is resized, keep the view-centered anchor (we also recenter explicitly on window resize)
     setResizeAnchor(QGraphicsView::AnchorViewCenter);
+    // Enable drag & drop
+    setAcceptDrops(true);
     
     // Enable mouse tracking for panning
     setMouseTracking(true);
@@ -437,7 +442,7 @@ void ScreenCanvas::clearScreens() {
 }
 
 void ScreenCanvas::createScreenItems() {
-    const double SCALE_FACTOR = 0.2; // Scale factor used for compact positions
+    const double SCALE_FACTOR = m_scaleFactor; // Use member scale factor so drops match
     const double SCREEN_SPACING = 5.0; // Small gap between adjacent screens
     
     // Calculate compact positioning
@@ -486,6 +491,55 @@ void ScreenCanvas::updateRemoteCursor(int globalX, int globalY) {
 
 void ScreenCanvas::hideRemoteCursor() {
     if (m_remoteCursorDot) m_remoteCursorDot->setVisible(false);
+}
+
+// Drag & drop handlers
+void ScreenCanvas::dragEnterEvent(QDragEnterEvent* event) {
+    if (event->mimeData()->hasUrls() || event->mimeData()->hasImage()) {
+        event->acceptProposedAction();
+    } else {
+        QGraphicsView::dragEnterEvent(event);
+    }
+}
+
+void ScreenCanvas::dragMoveEvent(QDragMoveEvent* event) {
+    if (event->mimeData()->hasUrls() || event->mimeData()->hasImage()) {
+        event->acceptProposedAction();
+    } else {
+        QGraphicsView::dragMoveEvent(event);
+    }
+}
+
+void ScreenCanvas::dropEvent(QDropEvent* event) {
+    QImage image;
+    if (event->mimeData()->hasImage()) {
+        image = qvariant_cast<QImage>(event->mimeData()->imageData());
+    } else if (event->mimeData()->hasUrls()) {
+        const auto urls = event->mimeData()->urls();
+        if (!urls.isEmpty()) {
+            const QUrl& url = urls.first();
+            const QString path = url.toLocalFile();
+            if (!path.isEmpty()) image.load(path);
+        }
+    }
+    if (image.isNull()) {
+        QGraphicsView::dropEvent(event);
+        return;
+    }
+    // Create pixmap item; scale dimensions from device pixels to scene units using m_scaleFactor
+    const double w = image.width() * m_scaleFactor;
+    const double h = image.height() * m_scaleFactor;
+    QGraphicsPixmapItem* item = new QGraphicsPixmapItem(QPixmap::fromImage(image));
+    item->setFlags(QGraphicsItem::ItemIsMovable | QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemSendsGeometryChanges);
+    // Position at drop scene position, centering the image
+    const QPointF scenePos = mapToScene(event->position().toPoint());
+    item->setPos(scenePos.x() - w/2.0, scenePos.y() - h/2.0);
+    // Apply scale so the item renders at the intended size in scene coordinates
+    if (image.width() > 0) {
+        item->setScale(w / image.width());
+    }
+    m_scene->addItem(item);
+    event->acceptProposedAction();
 }
 
 QGraphicsRectItem* ScreenCanvas::createScreenItem(const ScreenInfo& screen, int index, const QRectF& position) {
@@ -681,18 +735,14 @@ bool ScreenCanvas::gestureEvent(QGestureEvent* event) {
 
 void ScreenCanvas::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
-        // Check if clicking on a screen item
-        QGraphicsItem* item = itemAt(event->pos());
-        if (item && item->type() == QGraphicsRectItem::Type) {
-            QGraphicsRectItem* rectItem = qgraphicsitem_cast<QGraphicsRectItem*>(item);
-            if (rectItem && rectItem->data(0).isValid()) {
-                int screenIndex = rectItem->data(0).toInt();
-                emit screenClicked(screenIndex);
+        // If clicking a movable item (e.g., dropped image), let the scene handle item drag
+        if (QGraphicsItem* item = itemAt(event->pos())) {
+            if (item->flags().testFlag(QGraphicsItem::ItemIsMovable)) {
+                QGraphicsView::mousePressEvent(event);
                 return;
             }
         }
-        
-        // Start panning
+        // Otherwise start panning the view
         m_panning = true;
         m_lastPanPoint = event->pos();
         setCursor(Qt::ClosedHandCursor);
@@ -714,9 +764,11 @@ void ScreenCanvas::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void ScreenCanvas::mouseReleaseEvent(QMouseEvent* event) {
-    if (event->button() == Qt::LeftButton && m_panning) {
-        m_panning = false;
-        setCursor(Qt::ArrowCursor);
+    if (event->button() == Qt::LeftButton) {
+        if (m_panning) {
+            m_panning = false;
+            setCursor(Qt::ArrowCursor);
+        }
     }
     QGraphicsView::mouseReleaseEvent(event);
 }
@@ -1022,7 +1074,7 @@ void MainWindow::createScreenViewPage() {
     m_screenCanvas->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     // Ensure viewport repaints fully so opacity effect animates correctly
     m_screenCanvas->setViewportUpdateMode(QGraphicsView::FullViewportUpdate);
-    connect(m_screenCanvas, &ScreenCanvas::screenClicked, this, &MainWindow::onScreenClicked);
+    // Screens are not clickable; canvas supports panning and media placement
     canvasLayout->addWidget(m_screenCanvas);
     // Canvas/content opacity effect & animation (apply to viewport for QGraphicsView)
     m_canvasOpacity = new QGraphicsOpacityEffect(m_screenCanvas->viewport());
@@ -1473,7 +1525,7 @@ void MainWindow::onWatchStatusChanged(bool watched) {
     if (watched) {
         if (!m_cursorTimer) {
             m_cursorTimer = new QTimer(this);
-            m_cursorTimer->setInterval(33); // ~30 fps
+            m_cursorTimer->setInterval(m_cursorUpdateIntervalMs); // configurable
             connect(m_cursorTimer, &QTimer::timeout, this, [this]() {
                 static int lastX = INT_MIN, lastY = INT_MIN;
                 const QPoint p = QCursor::pos();
@@ -1486,6 +1538,8 @@ void MainWindow::onWatchStatusChanged(bool watched) {
                 }
             });
         }
+        // Apply any updated interval before starting
+        m_cursorTimer->setInterval(m_cursorUpdateIntervalMs);
         if (!m_cursorTimer->isActive()) m_cursorTimer->start();
     } else {
         if (m_cursorTimer) m_cursorTimer->stop();

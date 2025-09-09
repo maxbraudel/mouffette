@@ -55,7 +55,6 @@ public:
     void hideRemoteCursor();
 
 signals:
-    void screenClicked(int screenIndex);
 
 protected:
     bool gestureEvent(QGestureEvent* event);
@@ -65,6 +64,10 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
+    // Drag & drop images
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dragMoveEvent(QDragMoveEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
 
 private:
     QGraphicsScene* m_scene;
@@ -78,6 +81,8 @@ private:
     QTimer* m_nativePinchGuardTimer = nullptr;
     // Remote cursor overlay
     QGraphicsEllipseItem* m_remoteCursorDot = nullptr;
+    // Unified scale factor used to lay out screens and to scale dropped media (scene pixels per device pixel)
+    double m_scaleFactor = 0.2;
     
     void createScreenItems();
     QGraphicsRectItem* createScreenItem(const ScreenInfo& screen, int index, const QRectF& position);
@@ -108,7 +113,6 @@ private slots:
     // Screen view slots
     void onBackToClientListClicked();
     void onSendMediaClicked();
-    void onScreenClicked(int screenId);
     void onScreensInfoReceived(const ClientInfo& clientInfo);
     void onWatchStatusChanged(bool watched);
     
@@ -197,7 +201,8 @@ private:
     QPropertyAnimation* m_volumeFade = nullptr;
     // Cursor monitoring (only when this client is watched by someone else)
     QTimer* m_cursorTimer = nullptr;
-    
+    int m_cursorUpdateIntervalMs = 33; // ~30 Hz by default
+
     // Menu and actions
     QMenu* m_fileMenu;
     QMenu* m_helpMenu;
