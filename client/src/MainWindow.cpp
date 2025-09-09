@@ -15,6 +15,9 @@
 #include <QNativeGestureEvent>
 #include <QCursor>
 #include <QRandomGenerator>
+#include <QPainter>
+#include <QPaintEvent>
+#include <QStyleOption>
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -38,6 +41,64 @@
 #endif
 
 const QString MainWindow::DEFAULT_SERVER_URL = "ws://192.168.0.188:8080";
+
+// Simple modern circular line spinner (no Q_OBJECT needed)
+class SpinnerWidget : public QWidget {
+public:
+    explicit SpinnerWidget(QWidget* parent = nullptr)
+        : QWidget(parent), m_angle(0) {
+        setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        m_timer = new QTimer(this);
+        connect(m_timer, &QTimer::timeout, this, [this]() {
+            m_angle = (m_angle + 6) % 360; // smooth rotation
+            update();
+        });
+        m_timer->setInterval(16); // ~60 FPS
+    }
+
+    void start() { if (!m_timer->isActive()) m_timer->start(); }
+    void stop() { if (m_timer->isActive()) m_timer->stop(); }
+
+protected:
+    void paintEvent(QPaintEvent* event) override {
+        Q_UNUSED(event);
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing, true);
+
+        // Palette-aware background
+        QStyleOption opt; opt.initFrom(this);
+        style()->drawPrimitive(QStyle::PE_Widget, &opt, &p, this);
+
+    const int s = qMin(width(), height());
+    // Smaller radius: scale down compared to previous (from s/6 to s/10), with sane clamps
+    const int outer = qMax(28, qMin(s / 10, 56));   // spinner diameter
+    // Thicker line for stronger visual weight
+    const int thickness = qMax(5, outer / 8);
+
+        QPointF center(width() / 2.0, height() / 2.0);
+        QRectF rect(center.x() - outer/2.0, center.y() - outer/2.0, outer, outer);
+        
+    QColor arc("#4a90e2"); // Match Send button background
+    arc.setAlpha(230);
+
+    // Flat caps (no rounded ends) as requested
+    p.setPen(QPen(arc, thickness, Qt::SolidLine, Qt::FlatCap));
+        int span = 16 * 300; // 300-degree arc for modern look
+        p.save();
+        p.translate(center);
+        p.rotate(m_angle);
+        p.translate(-center);
+        p.drawArc(rect, 0, span);
+        p.restore();
+    }
+
+    QSize minimumSizeHint() const override { return QSize(48, 48); }
+
+private:
+    QTimer* m_timer;
+    int m_angle;
+};
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -127,8 +188,8 @@ void MainWindow::showScreenView(const ClientInfo& client) {
     // Update client name
     m_clientNameLabel->setText(QString("%1 (%2)").arg(client.getMachineName()).arg(client.getPlatform()));
     
-    // Show loading indicator and hide canvas and volume while waiting for data
-    if (m_loadingIndicator) m_loadingIndicator->show();
+    // Show loading spinner and hide canvas and volume while waiting for data
+    if (m_loadingSpinner) { m_loadingSpinner->show(); m_loadingSpinner->start(); }
     if (m_volumeIndicator) m_volumeIndicator->hide();
     if (m_screenCanvas) {
         m_screenCanvas->clearScreens();
@@ -777,24 +838,19 @@ void MainWindow::createScreenViewPage() {
 
     m_screenViewLayout->addLayout(headerLayout);
     
-    // Loading indicator (initially hidden)
-    m_loadingIndicator = new QLabel("Loading screen information...");
-    m_loadingIndicator->setStyleSheet(
-        "QLabel { "
-        "   font-size: 16px; "
-        "   color: palette(text); "
-        "   padding: 20px; "
-        "   text-align: center; "
-        "   background-color: palette(base); "
+    // Loading spinner (initially hidden)
+    m_loadingSpinner = new SpinnerWidget();
+    m_loadingSpinner->setStyleSheet(
+        "SpinnerWidget { "
         "   border: 1px solid palette(mid); "
         "   border-radius: 5px; "
+        "   background-color: palette(base); "
         "}"
     );
-    m_loadingIndicator->setAlignment(Qt::AlignCenter);
-    m_loadingIndicator->setMinimumHeight(400);
-    m_loadingIndicator->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    m_loadingIndicator->hide(); // Initially hidden
-    m_screenViewLayout->addWidget(m_loadingIndicator, 1);
+    // Slightly smaller min height so the spinner doesn't feel oversized
+    m_loadingSpinner->setMinimumHeight(320);
+    m_loadingSpinner->hide();
+    m_screenViewLayout->addWidget(m_loadingSpinner, 1);
     
     // Canvas container with styling to match client list widget
     m_screenCanvas = new ScreenCanvas();
@@ -822,10 +878,11 @@ void MainWindow::createScreenViewPage() {
     connect(m_sendButton, &QPushButton::clicked, this, &MainWindow::onSendMediaClicked);
     // Keep button at bottom, centered
     m_screenViewLayout->addWidget(m_sendButton, 0, Qt::AlignHCenter);
-    // Ensure header has no stretch, canvas expands, button fixed
+    // Ensure header has no stretch, spinner/canvas expand, button fixed
     m_screenViewLayout->setStretch(0, 0); // header
-    m_screenViewLayout->setStretch(1, 1); // canvas expands
-    m_screenViewLayout->setStretch(2, 0); // button fixed
+    m_screenViewLayout->setStretch(1, 1); // spinner expands when visible
+    m_screenViewLayout->setStretch(2, 1); // canvas expands when visible
+    m_screenViewLayout->setStretch(3, 0); // button fixed
     
     // Add to stacked widget
     m_stackedWidget->addWidget(m_screenViewWidget);
@@ -1181,8 +1238,8 @@ void MainWindow::onScreensInfoReceived(const ClientInfo& clientInfo) {
         qDebug() << "Updating canvas with fresh screens for" << clientInfo.getMachineName();
         m_selectedClient = clientInfo; // keep selected client in sync
         
-        // Hide loading indicator and show canvas and volume with fresh data
-        if (m_loadingIndicator) m_loadingIndicator->hide();
+    // Hide loading spinner and show canvas and volume with fresh data
+    if (m_loadingSpinner) { m_loadingSpinner->hide(); m_loadingSpinner->stop(); }
         if (m_screenCanvas) {
             m_screenCanvas->setScreens(clientInfo.getScreens());
             m_screenCanvas->show();

@@ -35,6 +35,8 @@ class QAction;
 class QMenu;
 QT_END_NAMESPACE
 
+class SpinnerWidget; // forward declaration for custom loading spinner
+
 // Custom screen canvas widget with zoom and pan capabilities
 class ScreenCanvas : public QGraphicsView {
     Q_OBJECT
@@ -165,7 +167,7 @@ private:
     QLabel* m_clientNameLabel;
     ScreenCanvas* m_screenCanvas;
     QLabel* m_volumeIndicator;
-    QLabel* m_loadingIndicator;
+    SpinnerWidget* m_loadingSpinner;
     QPushButton* m_sendButton;
     QPushButton* m_backButton;
     
