@@ -550,6 +550,12 @@ public:
     m_progressFillRectItem->setZValue(102.0);
     m_progressFillRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_progressFillRectItem->setAcceptedMouseButtons(Qt::NoButton);
+    // Controls are hidden by default (only visible when the item is selected)
+    if (m_controlsBg) m_controlsBg->setVisible(false);
+    if (m_playBtnRectItem) m_playBtnRectItem->setVisible(false);
+    if (m_playIcon) m_playIcon->setVisible(false);
+    if (m_progressBgRectItem) m_progressBgRectItem->setVisible(false);
+    if (m_progressFillRectItem) m_progressFillRectItem->setVisible(false);
     }
     ~ResizableVideoItem() override {
     if (m_player) QObject::disconnect(m_player, nullptr, nullptr, nullptr);
@@ -567,6 +573,7 @@ public:
     }
     // Expose a helper for view-level control handling
     bool handleControlsPressAtItemPos(const QPointF& itemPos) {
+        if (!isSelected()) return false;
         // Play button
         if (m_playBtnRectItemCoords.contains(itemPos)) { togglePlayPause(); return true; }
         // Progress bar
@@ -587,18 +594,20 @@ public:
         } else {
             painter->fillRect(br, Qt::black);
         }
-        // Update floating controls overlay
-        updateControlsLayout();
+        // Update floating controls overlay (only relevant when selected)
+        if (isSelected()) updateControlsLayout();
         // Selection/handles and label
         paintSelectionAndLabel(painter);
     }
     QRectF boundingRect() const override {
         QRectF br(0,0, baseWidth(), baseHeight());
-        // add controls height in item units (for event hit testing)
-        int padYpx = 4;
-        int controlHpx = (m_labelText ? static_cast<int>(m_labelText->boundingRect().height()) + 2*padYpx : 24);
-        qreal extra = toItemLengthFromPixels(controlHpx + 8); // include small gap
-        br.setHeight(br.height() + extra);
+        // Only extend for controls when selected
+        if (isSelected()) {
+            int padYpx = 4;
+            int controlHpx = (m_labelText ? static_cast<int>(m_labelText->boundingRect().height()) + 2*padYpx : 24);
+            qreal extra = toItemLengthFromPixels(controlHpx + 8); // include small gap
+            br.setHeight(br.height() + extra);
+        }
         if (isSelected()) {
             qreal pad = toItemLengthFromPixels(m_selectionSize) / 2.0;
             br = br.adjusted(-pad, -pad, pad, pad);
@@ -607,9 +616,11 @@ public:
     }
     QPainterPath shape() const override {
         QPainterPath p; p.addRect(QRectF(0,0, baseWidth(), baseHeight()));
-        // controls clickable areas (use last computed item-space rects)
-        if (!m_playBtnRectItemCoords.isNull()) p.addRect(m_playBtnRectItemCoords);
-        if (!m_progRectItemCoords.isNull()) p.addRect(m_progRectItemCoords);
+        // controls clickable areas only when selected
+        if (isSelected()) {
+            if (!m_playBtnRectItemCoords.isNull()) p.addRect(m_playBtnRectItemCoords);
+            if (!m_progRectItemCoords.isNull()) p.addRect(m_progRectItemCoords);
+        }
         if (isSelected()) {
             const qreal s = toItemLengthFromPixels(m_selectionSize);
             QRectF br(0,0, baseWidth(), baseHeight());
@@ -632,13 +643,13 @@ public:
             event->accept();
             return;
         }
-        // Controls interactions using last computed rects
-        if (m_playBtnRectItemCoords.contains(event->pos())) {
+        // Controls interactions using last computed rects (only when selected)
+        if (isSelected() && m_playBtnRectItemCoords.contains(event->pos())) {
             togglePlayPause();
             event->accept();
             return;
         }
-        if (m_progRectItemCoords.contains(event->pos())) {
+        if (isSelected() && m_progRectItemCoords.contains(event->pos())) {
             qreal r = (event->pos().x() - m_progRectItemCoords.left()) / m_progRectItemCoords.width();
             seekToRatio(r);
             event->accept();
@@ -646,9 +657,31 @@ public:
         }
         ResizableMediaBase::mousePressEvent(event);
     }
+protected:
+    QVariant itemChange(GraphicsItemChange change, const QVariant &value) override {
+        if (change == ItemSelectedChange) {
+            const bool willBeSelected = value.toBool();
+            // Prepare for geometry change since bounding rect depends on selection
+            prepareGeometryChange();
+            setControlsVisible(willBeSelected);
+        }
+        if (change == ItemSelectedHasChanged) {
+            // Recompute layout after selection toggles
+            updateControlsLayout();
+        }
+        return ResizableMediaBase::itemChange(change, value);
+    }
 private:
+    void setControlsVisible(bool show) {
+        if (m_controlsBg) m_controlsBg->setVisible(show);
+        if (m_playBtnRectItem) m_playBtnRectItem->setVisible(show);
+        if (m_playIcon) m_playIcon->setVisible(show);
+        if (m_progressBgRectItem) m_progressBgRectItem->setVisible(show);
+        if (m_progressFillRectItem) m_progressFillRectItem->setVisible(show);
+    }
     void updateControlsLayout() {
         if (!scene() || scene()->views().isEmpty()) return;
+        if (!isSelected()) return; // layout only needed when visible
         QGraphicsView* v = scene()->views().first();
         // Heights based on filename label height
         const int padYpx = 4;
