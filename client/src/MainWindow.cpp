@@ -415,13 +415,30 @@ QRectF ScreenCanvas::screensBoundingRect() const {
 void ScreenCanvas::recenterWithMargin(int marginPx) {
     QRectF bounds = screensBoundingRect();
     if (bounds.isNull() || !bounds.isValid()) return;
-    // Convert pixel margin in view space to scene space using current scale
-    qreal sx = transform().m11();
-    qreal sy = transform().m22();
-    qreal mx = sx != 0 ? marginPx / sx : marginPx;
-    qreal my = sy != 0 ? marginPx / sy : marginPx;
-    bounds.adjust(-mx, -my, mx, my);
-    fitInView(bounds, Qt::KeepAspectRatio);
+    // Compute a scale that fits the scene bounds into the viewport while leaving
+    // a fixed pixel margin (marginPx) around the content in view coordinates.
+    // Instead of converting margin using the current scale (which changes after fit),
+    // derive the scale from the viewport size minus the desired margins so it works in one pass.
+    const QSize vp = viewport() ? viewport()->size() : size();
+    const qreal availW = static_cast<qreal>(vp.width())  - 2.0 * marginPx;
+    const qreal availH = static_cast<qreal>(vp.height()) - 2.0 * marginPx;
+
+    if (availW <= 1 || availH <= 1 || bounds.width() <= 0 || bounds.height() <= 0) {
+        // Fallback to a simple fit if viewport is too small
+        fitInView(bounds, Qt::KeepAspectRatio);
+        centerOn(bounds.center());
+        return;
+    }
+
+    const qreal sx = availW / bounds.width();
+    const qreal sy = availH / bounds.height();
+    const qreal s = std::min(sx, sy);
+
+    // Apply the scale in one shot and center on content
+    QTransform t;
+    t.scale(s, s);
+    setTransform(t);
+    centerOn(bounds.center());
 }
 
 void ScreenCanvas::keyPressEvent(QKeyEvent* event) {
@@ -530,8 +547,14 @@ void MainWindow::setupUI() {
     setCentralWidget(m_centralWidget);
     
     m_mainLayout = new QVBoxLayout(m_centralWidget);
-    m_mainLayout->setSpacing(20);
-    m_mainLayout->setContentsMargins(20, 20, 20, 20);
+    m_mainLayout->setSpacing(0); // Remove spacing, we'll handle it manually
+    m_mainLayout->setContentsMargins(0, 0, 0, 0); // Remove margins from main layout
+    
+    // Top section with margins
+    QWidget* topSection = new QWidget();
+    QVBoxLayout* topLayout = new QVBoxLayout(topSection);
+    topLayout->setContentsMargins(20, 20, 20, 20); // Apply margins only to top section
+    topLayout->setSpacing(20);
     
     // Connection section (always visible)
     m_connectionLayout = new QHBoxLayout();
@@ -567,20 +590,21 @@ void MainWindow::setupUI() {
     m_connectionLayout->addWidget(m_connectToggleButton);
     m_connectionLayout->addWidget(m_settingsButton);
     
-    m_mainLayout->addLayout(m_connectionLayout);
+    topLayout->addLayout(m_connectionLayout);
+    m_mainLayout->addWidget(topSection);
     
-    // Add separator line
-    QFrame* separator = new QFrame();
-    separator->setFrameShape(QFrame::HLine);
-    separator->setFrameShadow(QFrame::Sunken);
-    separator->setStyleSheet("QFrame { color: palette(mid); }");
-    m_mainLayout->addWidget(separator);
+    // Bottom section with margins (no separator line)
+    QWidget* bottomSection = new QWidget();
+    QVBoxLayout* bottomLayout = new QVBoxLayout(bottomSection);
+    bottomLayout->setContentsMargins(20, 20, 20, 20); // Apply margins only to bottom section
+    bottomLayout->setSpacing(20);
     
     // Create stacked widget for page navigation
     m_stackedWidget = new QStackedWidget();
     // Block stray key events (like space) at the stack level
     m_stackedWidget->installEventFilter(this);
-    m_mainLayout->addWidget(m_stackedWidget);
+    bottomLayout->addWidget(m_stackedWidget);
+    m_mainLayout->addWidget(bottomSection);
     
     // Create client list page
     createClientListPage();
@@ -1135,13 +1159,21 @@ void MainWindow::updateClientList(const QList<ClientInfo>& clients) {
         item->setFont(font);
         item->setForeground(QColor(102, 102, 102)); // #666 color
         
-        // Set a custom size hint to center the item vertically in the list widget
-        item->setSizeHint(QSize(m_clientListWidget->width(), m_clientListWidget->height()));
+    // Set a custom size hint to center the item vertically in the list widget.
+    // Use the viewport height (content area) to avoid off-by-margins that cause scrollbars.
+    const int viewportH = m_clientListWidget->viewport() ? m_clientListWidget->viewport()->height() : m_clientListWidget->height();
+    item->setSizeHint(QSize(m_clientListWidget->width(), qMax(0, viewportH)));
         
         m_clientListWidget->addItem(item);
+    // Ensure no scrollbars are shown for the single placeholder item
+    m_clientListWidget->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_clientListWidget->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         m_noClientsLabel->hide(); // Hide the separate label since we show message in list
     } else {
         m_noClientsLabel->hide();
+    // Restore scrollbar policies when there are items to potentially scroll
+    m_clientListWidget->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_clientListWidget->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         
         for (const ClientInfo& client : clients) {
             QString displayText = client.getDisplayText();
