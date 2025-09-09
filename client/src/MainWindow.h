@@ -89,6 +89,7 @@ private:
     QMap<int, QRectF> calculateCompactPositions(double scaleFactor, double spacing) const;
     QRectF screensBoundingRect() const;
     void zoomAroundViewportPos(const QPointF& vpPos, qreal factor);
+    void ensureZOrder();
 };
 
 class MainWindow : public QMainWindow {

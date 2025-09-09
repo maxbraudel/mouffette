@@ -454,6 +454,7 @@ void ScreenCanvas::createScreenItems() {
         m_screenItems.append(screenItem);
         m_scene->addItem(screenItem);
     }
+    ensureZOrder();
 }
 
 void ScreenCanvas::updateRemoteCursor(int globalX, int globalY) {
@@ -491,6 +492,14 @@ void ScreenCanvas::updateRemoteCursor(int globalX, int globalY) {
 
 void ScreenCanvas::hideRemoteCursor() {
     if (m_remoteCursorDot) m_remoteCursorDot->setVisible(false);
+}
+
+void ScreenCanvas::ensureZOrder() {
+    // Put screens at a low Z, remote cursor very high, media in between
+    for (QGraphicsRectItem* r : m_screenItems) {
+        if (r) r->setZValue(-100.0);
+    }
+    if (m_remoteCursorDot) m_remoteCursorDot->setZValue(10000.0);
 }
 
 // Drag & drop handlers
@@ -539,6 +548,7 @@ void ScreenCanvas::dropEvent(QDropEvent* event) {
         item->setScale(w / image.width());
     }
     m_scene->addItem(item);
+    ensureZOrder();
     event->acceptProposedAction();
 }
 
