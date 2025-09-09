@@ -98,7 +98,7 @@ private:
     
     void createScreenItems();
     QGraphicsRectItem* createScreenItem(const ScreenInfo& screen, int index, const QRectF& position);
-    QMap<int, QRectF> calculateCompactPositions(double scaleFactor, double spacing) const;
+    QMap<int, QRectF> calculateCompactPositions(double scaleFactor, double hSpacing, double vSpacing) const;
     QRectF screensBoundingRect() const;
     void zoomAroundViewportPos(const QPointF& vpPos, qreal factor);
     void ensureZOrder();

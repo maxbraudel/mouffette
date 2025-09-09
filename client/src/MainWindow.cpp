@@ -484,13 +484,14 @@ private:
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , m_centralWidget(nullptr)
-    , m_webSocketClient(new WebSocketClient(this))
+    , m_webSocketClient(new WebSocketClient(this)) // Initialize WebSocket client
     , m_statusUpdateTimer(new QTimer(this))
     , m_trayIcon(nullptr)
     , m_screenViewWidget(nullptr)
     , m_screenCanvas(nullptr)
     , m_ignoreSelectionChange(false)
     , m_displaySyncTimer(new QTimer(this))
+    , m_canvasStack(new QStackedWidget(this)) // Initialize m_canvasStack
 {
     // Check if system tray is available
     if (!QSystemTrayIcon::isSystemTrayAvailable()) {
@@ -711,6 +712,18 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
             }
         }
     }
+    // Apply rounded clipping to canvas widgets so border radius is visible
+    if (obj == m_canvasContainer || obj == m_canvasStack || (m_screenCanvas && obj == m_screenCanvas->viewport())) {
+        if (event->type() == QEvent::Resize || event->type() == QEvent::Show) {
+            if (QWidget* w = qobject_cast<QWidget*>(obj)) {
+                const int r = 5; // match clients list radius
+                QPainterPath path;
+                path.addRoundedRect(w->rect(), r, r);
+                QRegion mask(path.toFillPolygon().toPolygon());
+                w->setMask(mask);
+            }
+        }
+    }
     return QMainWindow::eventFilter(obj, event);
 }
 
@@ -724,7 +737,11 @@ ScreenCanvas::ScreenCanvas(QWidget* parent)
     setDragMode(QGraphicsView::NoDrag);
     setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    setBackgroundBrush(QBrush(QColor(45, 45, 45)));
+    // Use the application palette for consistent theming with the client list container
+    const QBrush bgBrush = palette().brush(QPalette::Base);
+    setBackgroundBrush(bgBrush);        // outside the scene rect
+    if (m_scene) m_scene->setBackgroundBrush(bgBrush); // inside the scene rect
+    setFrameShape(QFrame::NoFrame);
     setRenderHint(QPainter::Antialiasing);
     // Use manual anchoring logic for consistent behavior across platforms
     setTransformationAnchor(QGraphicsView::NoAnchor);
@@ -781,10 +798,11 @@ void ScreenCanvas::clearScreens() {
 
 void ScreenCanvas::createScreenItems() {
     const double SCALE_FACTOR = m_scaleFactor; // Use member scale factor so drops match
-    const double SCREEN_SPACING = 5.0; // Small gap between adjacent screens
+    const double H_SPACING = 0.0;  // No horizontal gap between adjacent screens
+    const double V_SPACING = 5.0;  // Keep a small vertical gap between rows
     
     // Calculate compact positioning
-    QMap<int, QRectF> compactPositions = calculateCompactPositions(SCALE_FACTOR, SCREEN_SPACING);
+    QMap<int, QRectF> compactPositions = calculateCompactPositions(SCALE_FACTOR, H_SPACING, V_SPACING);
     
     for (int i = 0; i < m_screens.size(); ++i) {
         const ScreenInfo& screen = m_screens[i];
@@ -980,7 +998,7 @@ void ScreenCanvas::setScreenBorderWidthPx(int px) {
     }
 }
 
-QMap<int, QRectF> ScreenCanvas::calculateCompactPositions(double scaleFactor, double spacing) const {
+QMap<int, QRectF> ScreenCanvas::calculateCompactPositions(double scaleFactor, double hSpacing, double vSpacing) const {
     QMap<int, QRectF> positions;
     
     if (m_screens.isEmpty()) {
@@ -1020,16 +1038,16 @@ QMap<int, QRectF> ScreenCanvas::calculateCompactPositions(double scaleFactor, do
         // Start new row if Y position changed significantly
         if (lastY != INT_MIN && qAbs(screen.y - lastY) > 100) {
             currentX = 0;
-            currentY += rowHeight + spacing;
+            currentY += rowHeight + vSpacing;
             rowHeight = 0;
         }
         
         // Position the screen
         QRectF rect(currentX, currentY, screenWidth, screenHeight);
-        positions[index] = rect;
+    positions[index] = rect;
         
         // Update for next screen
-        currentX += screenWidth + spacing;
+    currentX += screenWidth + hSpacing;
         rowHeight = qMax(rowHeight, screenHeight);
         lastY = screen.y;
     }
@@ -1527,18 +1545,37 @@ void MainWindow::createScreenViewPage() {
     m_canvasContainer = new QWidget();
     m_canvasContainer->setObjectName("CanvasContainer");
     m_canvasContainer->setMinimumHeight(400);
+    // Ensure stylesheet background/border is actually painted
+    m_canvasContainer->setAttribute(Qt::WA_StyledBackground, true);
+    // Match the dark background used by the client list container via palette(base)
     m_canvasContainer->setStyleSheet(
         "QWidget#CanvasContainer { "
         "   border: 1px solid palette(mid); "
         "   border-radius: 5px; "
         "   background-color: palette(base); "
-        "}"
+    "} "
+        // Ensure stacked pages inherit the same background to prevent light grey bleed
+    "QWidget#CanvasContainer > * { "
+    "   background-color: palette(base); "
+    "   border-radius: 5px; "
+    "}"
     );
     QVBoxLayout* containerLayout = new QVBoxLayout(m_canvasContainer);
-    containerLayout->setContentsMargins(0,0,0,0);
+    // Leave a small margin so the rounded border is visible and not overdrawn by children
+    containerLayout->setContentsMargins(4,4,4,4);
     containerLayout->setSpacing(0);
     m_canvasStack = new QStackedWidget();
+    // Rounded corners and border directly on the visible stack area
+    m_canvasStack->setStyleSheet(
+        "QStackedWidget { "
+        "   background-color: palette(base); "
+        "   border: 1px solid palette(mid); "
+        "   border-radius: 5px; "
+        "}"
+    );
     containerLayout->addWidget(m_canvasStack);
+    // Clip stack to rounded corners
+    m_canvasStack->installEventFilter(this);
 
     // Spinner page
     m_loadingSpinner = new SpinnerWidget();
@@ -1572,6 +1609,12 @@ void MainWindow::createScreenViewPage() {
     canvasLayout->setSpacing(0);
     m_screenCanvas = new ScreenCanvas();
     m_screenCanvas->setMinimumHeight(400);
+    // Ensure the viewport background matches and is rounded
+    if (m_screenCanvas->viewport()) {
+        m_screenCanvas->viewport()->setAttribute(Qt::WA_StyledBackground, true);
+        m_screenCanvas->viewport()->setAutoFillBackground(true);
+        m_screenCanvas->viewport()->setStyleSheet("background-color: palette(base); border-radius: 5px;");
+    }
     m_screenCanvas->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     // Ensure viewport repaints fully so opacity effect animates correctly
     m_screenCanvas->setViewportUpdateMode(QGraphicsView::FullViewportUpdate);
@@ -1591,6 +1634,9 @@ void MainWindow::createScreenViewPage() {
     m_canvasStack->addWidget(canvasPage);  // index 1: canvas
     m_canvasStack->setCurrentIndex(1);     // default to canvas page hidden (opacity 0) until data
     m_screenViewLayout->addWidget(m_canvasContainer, 1);
+    // Clip container and viewport to rounded corners
+    m_canvasContainer->installEventFilter(this);
+    if (m_screenCanvas && m_screenCanvas->viewport()) m_screenCanvas->viewport()->installEventFilter(this);
 
     // Ensure focus is on canvas, and block stray key events
     m_screenViewWidget->installEventFilter(this);
