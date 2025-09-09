@@ -155,6 +155,7 @@ public:
         m_visualSize = qMax(4, visualSizePx);
         m_selectionSize = qMax(m_visualSize, selectionSizePx);
         setFlags(QGraphicsItem::ItemIsMovable | QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemSendsGeometryChanges);
+    setAcceptHoverEvents(true);
         m_baseSize = pm.size();
         setScale(1.0);
         setZValue(1.0);
@@ -285,35 +286,35 @@ protected:
             newScale = std::clamp<qreal>(newScale, 0.05, 100.0);
             setScale(newScale);
             setPos(m_fixedScenePoint - newScale * m_fixedItemPoint);
+            // Keep appropriate cursor while resizing
+            setHoverCursorForHandle(m_activeHandle);
             event->accept();
             return;
         }
         // Update cursor on hover near handles
-        switch (hitTestHandle(event->pos())) {
-            case TopLeft:
-            case BottomRight:
-                QApplication::setOverrideCursor(Qt::SizeFDiagCursor);
-                break;
-            case TopRight:
-            case BottomLeft:
-                QApplication::setOverrideCursor(Qt::SizeBDiagCursor);
-                break;
-            default:
-                QApplication::restoreOverrideCursor();
-                break;
-        }
+        setHoverCursorForHandle(hitTestHandle(event->pos()));
         QGraphicsPixmapItem::mouseMoveEvent(event);
     }
 
     void mouseReleaseEvent(QGraphicsSceneMouseEvent* event) override {
         if (m_activeHandle != None) {
             m_activeHandle = None;
-            QApplication::restoreOverrideCursor();
+            clearHoverCursor();
             ungrabMouse();
             event->accept();
             return;
         }
         QGraphicsPixmapItem::mouseReleaseEvent(event);
+    }
+
+    void hoverMoveEvent(QGraphicsSceneHoverEvent* event) override {
+        setHoverCursorForHandle(hitTestHandle(event->pos()));
+        QGraphicsPixmapItem::hoverMoveEvent(event);
+    }
+
+    void hoverLeaveEvent(QGraphicsSceneHoverEvent* event) override {
+        clearHoverCursor();
+        QGraphicsPixmapItem::hoverLeaveEvent(event);
     }
 
 private:
@@ -326,6 +327,8 @@ private:
     qreal m_initialGrabDist = 1.0;
     int m_visualSize = 8;
     int m_selectionSize = 12;
+    bool m_cursorOverridden = false;
+    Handle m_lastHoverHandle = None;
 
     Handle hitTestHandle(const QPointF& p) const {
     const qreal s = m_selectionSize; // selection square centered on corners
@@ -335,6 +338,29 @@ private:
     if (QRectF(QPointF(br.left(), br.bottom()) - QPointF(s/2,s/2), QSizeF(s,s)).contains(p)) return BottomLeft;
     if (QRectF(br.bottomRight() - QPointF(s/2,s/2), QSizeF(s,s)).contains(p)) return BottomRight;
         return None;
+    }
+    void setHoverCursorForHandle(Handle h) {
+        if (h == None) {
+            clearHoverCursor();
+            m_lastHoverHandle = None;
+            return;
+        }
+        Qt::CursorShape shape = (h == TopLeft || h == BottomRight)
+                                  ? Qt::SizeFDiagCursor
+                                  : Qt::SizeBDiagCursor;
+        if (m_cursorOverridden) {
+            QApplication::changeOverrideCursor(shape);
+        } else {
+            QApplication::setOverrideCursor(shape);
+            m_cursorOverridden = true;
+        }
+        m_lastHoverHandle = h;
+    }
+    void clearHoverCursor() {
+        if (m_cursorOverridden) {
+            QApplication::restoreOverrideCursor();
+            m_cursorOverridden = false;
+        }
     }
     Handle opposite(Handle h) const {
         switch (h) {
