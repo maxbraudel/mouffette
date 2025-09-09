@@ -89,7 +89,7 @@ private:
     // Unified scale factor used to lay out screens and to scale dropped media (scene pixels per device pixel)
     double m_scaleFactor = 0.2;
     // Resize handle sizes for media items
-    int m_mediaHandleSelectionSizePx = 100; // large hit area by default
+    int m_mediaHandleSelectionSizePx = 30; // large hit area by default
     int m_mediaHandleVisualSizePx = 12;     // smaller visual indicator
     
     void createScreenItems();

@@ -180,6 +180,25 @@ public:
         return true;
     }
 
+    // For view-level hover support: suggest a cursor based on a scene position
+    Qt::CursorShape cursorForScenePos(const QPointF& scenePos) const {
+        switch (hitTestHandle(mapFromScene(scenePos))) {
+            case TopLeft:
+            case BottomRight:
+                return Qt::SizeFDiagCursor;
+            case TopRight:
+            case BottomLeft:
+                return Qt::SizeBDiagCursor;
+            default:
+                return Qt::ArrowCursor;
+        }
+    }
+
+    // Check if this item is currently being resized
+    bool isActivelyResizing() const {
+        return m_activeHandle != None;
+    }
+
     void setHandleVisualSize(int px) {
         int newVisual = qMax(4, px);
         int newSelection = qMax(m_selectionSize, newVisual);
@@ -286,20 +305,16 @@ protected:
             newScale = std::clamp<qreal>(newScale, 0.05, 100.0);
             setScale(newScale);
             setPos(m_fixedScenePoint - newScale * m_fixedItemPoint);
-            // Keep appropriate cursor while resizing
-            setHoverCursorForHandle(m_activeHandle);
             event->accept();
             return;
         }
-        // Update cursor on hover near handles
-        setHoverCursorForHandle(hitTestHandle(event->pos()));
+        // Do not manage cursor here - let the view handle it globally
         QGraphicsPixmapItem::mouseMoveEvent(event);
     }
 
     void mouseReleaseEvent(QGraphicsSceneMouseEvent* event) override {
         if (m_activeHandle != None) {
             m_activeHandle = None;
-            clearHoverCursor();
             ungrabMouse();
             event->accept();
             return;
@@ -308,12 +323,12 @@ protected:
     }
 
     void hoverMoveEvent(QGraphicsSceneHoverEvent* event) override {
-        setHoverCursorForHandle(hitTestHandle(event->pos()));
+        // Do not manage cursor here - let the view handle it globally
         QGraphicsPixmapItem::hoverMoveEvent(event);
     }
 
     void hoverLeaveEvent(QGraphicsSceneHoverEvent* event) override {
-        clearHoverCursor();
+        // Do not manage cursor here - let the view handle it globally
         QGraphicsPixmapItem::hoverLeaveEvent(event);
     }
 
@@ -328,7 +343,6 @@ private:
     // Desired sizes in device pixels (screen space)
     int m_visualSize = 8;
     int m_selectionSize = 12;
-    bool m_cursorOverridden = false;
     Handle m_lastHoverHandle = None;
 
     Handle hitTestHandle(const QPointF& p) const {
@@ -340,29 +354,7 @@ private:
     if (QRectF(br.bottomRight() - QPointF(s/2,s/2), QSizeF(s,s)).contains(p)) return BottomRight;
         return None;
     }
-    void setHoverCursorForHandle(Handle h) {
-        if (h == None) {
-            clearHoverCursor();
-            m_lastHoverHandle = None;
-            return;
-        }
-        Qt::CursorShape shape = (h == TopLeft || h == BottomRight)
-                                  ? Qt::SizeFDiagCursor
-                                  : Qt::SizeBDiagCursor;
-        if (m_cursorOverridden) {
-            QApplication::changeOverrideCursor(shape);
-        } else {
-            QApplication::setOverrideCursor(shape);
-            m_cursorOverridden = true;
-        }
-        m_lastHoverHandle = h;
-    }
-    void clearHoverCursor() {
-        if (m_cursorOverridden) {
-            QApplication::restoreOverrideCursor();
-            m_cursorOverridden = false;
-        }
-    }
+    // No global override cursor helpers needed with per-item cursors
     Handle opposite(Handle h) const {
         switch (h) {
             case TopLeft: return BottomRight;
@@ -1035,24 +1027,26 @@ void ScreenCanvas::mousePressEvent(QMouseEvent* event) {
         if (topHandleItem) {
             topHandleItem->setSelected(true);
             if (topHandleItem->beginResizeAtScenePos(scenePos)) {
+                // Set resize cursor during active resize
+                Qt::CursorShape cursor = topHandleItem->cursorForScenePos(scenePos);
+                viewport()->setCursor(cursor);
                 event->accept();
                 return;
             }
         }
-        // If clicking over an item, try normal scene behavior (select/move)
+        // Decide based on item type under cursor: media -> scene, screens/empty -> pan
         const QList<QGraphicsItem*> hitItems = items(event->pos());
+        bool hitMedia = false;
         for (QGraphicsItem* it : hitItems) {
-            if (it) { QGraphicsView::mousePressEvent(event); return; }
+            if (dynamic_cast<ResizablePixmapItem*>(it)) { hitMedia = true; break; }
         }
-        // If clicking any item (but not on a handle), let the scene handle selection/move; only pan on empty space
-        // (fallthrough)
+        if (hitMedia) { QGraphicsView::mousePressEvent(event); return; }
         // Otherwise start panning the view
         if (m_scene) {
             m_scene->clearSelection(); // single-click on empty space deselects items
         }
         m_panning = true;
         m_lastPanPoint = event->pos();
-        setCursor(Qt::ClosedHandCursor);
         event->accept();
         return;
     }
@@ -1062,12 +1056,43 @@ void ScreenCanvas::mousePressEvent(QMouseEvent* event) {
 void ScreenCanvas::mouseMoveEvent(QMouseEvent* event) {
     // Track last mouse pos in viewport coords (used for zoom anchoring)
     m_lastMousePos = event->pos();
-    // If dragging with left button over any item, delegate to scene; only pan when empty space
-    if (event->buttons() & Qt::LeftButton) {
-    if (!items(event->pos()).isEmpty()) {
-            QGraphicsView::mouseMoveEvent(event);
-            return;
+    
+    // PRIORITY: Check if we're over a resize handle and set cursor accordingly
+    // This must be done BEFORE any other cursor management to ensure it's not overridden
+    const QPointF scenePos = mapToScene(event->pos());
+    Qt::CursorShape resizeCursor = Qt::ArrowCursor;
+    bool onResizeHandle = false;
+    
+    // Check all ResizablePixmapItems for handle hover (prioritize topmost)
+    qreal topZ = -std::numeric_limits<qreal>::infinity();
+    for (QGraphicsItem* it : m_scene->items()) {
+        if (auto* rp = dynamic_cast<ResizablePixmapItem*>(it)) {
+            if (rp->zValue() >= topZ) {
+                Qt::CursorShape itemCursor = rp->cursorForScenePos(scenePos);
+                if (itemCursor != Qt::ArrowCursor) {
+                    resizeCursor = itemCursor;
+                    onResizeHandle = true;
+                    topZ = rp->zValue();
+                }
+            }
         }
+    }
+    
+    // Set the cursor with highest priority
+    if (onResizeHandle) {
+        viewport()->setCursor(resizeCursor);
+    } else {
+        viewport()->unsetCursor();
+    }
+    
+    // Handle dragging and panning logic
+    if (event->buttons() & Qt::LeftButton) {
+        const QList<QGraphicsItem*> hitItems = items(event->pos());
+        bool hitMedia = false;
+        for (QGraphicsItem* it : hitItems) {
+            if (dynamic_cast<ResizablePixmapItem*>(it)) { hitMedia = true; break; }
+        }
+        if (hitMedia) { QGraphicsView::mouseMoveEvent(event); return; }
     }
     if (m_panning) {
         // Pan the view
@@ -1083,9 +1108,22 @@ void ScreenCanvas::mouseReleaseEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
         if (m_panning) {
             m_panning = false;
-            setCursor(Qt::ArrowCursor);
             event->accept();
             return;
+        }
+        // Check if any item was being resized and reset cursor
+        bool wasResizing = false;
+        for (QGraphicsItem* it : m_scene->items()) {
+            if (auto* rp = dynamic_cast<ResizablePixmapItem*>(it)) {
+                if (rp->isActivelyResizing()) {
+                    wasResizing = true;
+                    break;
+                }
+            }
+        }
+        if (wasResizing) {
+            // Reset cursor after resize
+            viewport()->unsetCursor();
         }
     }
     QGraphicsView::mouseReleaseEvent(event);
