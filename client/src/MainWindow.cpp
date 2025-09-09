@@ -833,6 +833,7 @@ void MainWindow::createClientListPage() {
     
     m_clientListWidget = new QListWidget();
     // Use palette-based colors so light/dark themes adapt automatically
+    // Add subtle hover effect and remove persistent selection highlight
     m_clientListWidget->setStyleSheet(
         "QListWidget { "
         "   border: 1px solid palette(mid); "
@@ -840,20 +841,35 @@ void MainWindow::createClientListPage() {
         "   padding: 5px; "
         "   background-color: palette(base); "
         "   color: palette(text); "
-        "}" 
+        "}"
         "QListWidget::item { "
         "   padding: 10px; "
         "   border-bottom: 1px solid palette(midlight); "
         "}" 
+        // Hover: very light blue tint
+        "QListWidget::item:hover { "
+        "   background-color: rgba(74, 144, 226, 28); "
+        "}"
+        // Suppress active/selected highlight colors
         "QListWidget::item:selected { "
-        "   background-color: palette(highlight); "
-        "   color: palette(highlighted-text); "
+        "   background-color: transparent; "
+        "   color: palette(text); "
+        "}"
+        "QListWidget::item:selected:active { "
+        "   background-color: transparent; "
+        "   color: palette(text); "
+        "}"
+        "QListWidget::item:selected:hover { "
+        "   background-color: rgba(74, 144, 226, 28); "
+        "   color: palette(text); "
         "}"
     );
     connect(m_clientListWidget, &QListWidget::itemClicked, this, &MainWindow::onClientItemClicked);
     // Prevent keyboard (space/enter) from triggering navigation
     m_clientListWidget->setFocusPolicy(Qt::NoFocus);
     m_clientListWidget->installEventFilter(this);
+    // Enable hover state over items (for :hover style)
+    m_clientListWidget->setMouseTracking(true);
     layout->addWidget(m_clientListWidget);
     
     m_noClientsLabel = new QLabel("No clients connected. Make sure other devices are running Mouffette and connected to the same server.");

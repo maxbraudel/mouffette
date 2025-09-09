@@ -179,8 +179,8 @@ private:
     QPushButton* m_backButton;
     // Loader/content animations
     QTimer* m_loaderDelayTimer = nullptr;
-    int m_loaderDelayMs = 1000;     // show spinner after this delay
-    int m_loaderFadeDurationMs = 10s00; // fade-in duration for spinner (loader)
+    int m_loaderDelayMs = 1000;       // show spinner after this delay
+    int m_loaderFadeDurationMs = 500; // fade-in duration for spinner (loader)
     int m_fadeDurationMs = 50;        // fade-in duration for canvas and indicators
     QGraphicsOpacityEffect* m_spinnerOpacity = nullptr;
     QPropertyAnimation* m_spinnerFade = nullptr;
