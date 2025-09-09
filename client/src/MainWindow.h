@@ -23,6 +23,7 @@
 #include <QGraphicsView>
 #include <QGraphicsScene>
 #include <QGraphicsRectItem>
+#include <QGraphicsEllipseItem>
 #include <QGestureEvent>
 #include <QPinchGesture>
 #include <QScrollBar>
@@ -49,6 +50,9 @@ public:
     void setScreens(const QList<ScreenInfo>& screens);
     void clearScreens();
     void recenterWithMargin(int marginPx = 33);
+    // Remote cursor visualization
+    void updateRemoteCursor(int globalX, int globalY);
+    void hideRemoteCursor();
 
 signals:
     void screenClicked(int screenIndex);
@@ -72,6 +76,8 @@ private:
     // macOS: track native pinch session to avoid handling two-finger scroll simultaneously
     bool m_nativePinchActive = false;
     QTimer* m_nativePinchGuardTimer = nullptr;
+    // Remote cursor overlay
+    QGraphicsEllipseItem* m_remoteCursorDot = nullptr;
     
     void createScreenItems();
     QGraphicsRectItem* createScreenItem(const ScreenInfo& screen, int index, const QRectF& position);
@@ -130,6 +136,7 @@ private:
     QString getPlatformName();
     int getSystemVolumePercent();
     void setupVolumeMonitoring();
+    void setupCursorMonitoring();
     void updateClientList(const QList<ClientInfo>& clients);
     void setUIEnabled(bool enabled);
     void showTrayMessage(const QString& title, const QString& message);
@@ -188,6 +195,8 @@ private:
     QPropertyAnimation* m_canvasFade = nullptr;
     QGraphicsOpacityEffect* m_volumeOpacity = nullptr;
     QPropertyAnimation* m_volumeFade = nullptr;
+    // Cursor monitoring (only when this client is watched by someone else)
+    QTimer* m_cursorTimer = nullptr;
     
     // Menu and actions
     QMenu* m_fileMenu;

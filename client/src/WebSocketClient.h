@@ -27,6 +27,8 @@ public:
     void watchScreens(const QString& targetClientId);
     void unwatchScreens(const QString& targetClientId);
     void sendStateSnapshot(const QList<ScreenInfo>& screens, int volumePercent);
+        // Send current cursor position (global desktop coordinates) when this client is watched
+        void sendCursorUpdate(int globalX, int globalY);
     
     // Getters
     QString getClientId() const { return m_clientId; }
@@ -42,6 +44,8 @@ signals:
     void messageReceived(const QJsonObject& message);
     void watchStatusChanged(bool watched);
     void dataRequestReceived();
+        // Emitted to watchers with remote cursor position of the watched target
+        void cursorPositionReceived(const QString& targetClientId, int x, int y);
 
 private slots:
     void onConnected();

@@ -153,6 +153,9 @@ class MouffetteServer {
             case 'stop_sharing':
                 this.handleStopSharing(clientId, message);
                 break;
+            case 'cursor_update':
+                this.handleCursorUpdate(clientId, message);
+                break;
             default:
                 console.log(`⚠️ Unknown message type: ${message.type}`);
         }
@@ -310,6 +313,24 @@ class MouffetteServer {
             type: 'stop_media',
             senderId: senderId
         }));
+    }
+
+    handleCursorUpdate(targetId, message) {
+        // Forward current cursor position from target to all watchers
+        const watchers = this.watchersByTarget.get(targetId);
+        if (!watchers || watchers.size === 0) return;
+        const x = typeof message.x === 'number' ? Math.round(message.x) : null;
+        const y = typeof message.y === 'number' ? Math.round(message.y) : null;
+        if (x === null || y === null) return;
+        for (const watcherId of watchers) {
+            const watcher = this.clients.get(watcherId);
+            if (!watcher || !watcher.ws) continue;
+            watcher.ws.send(JSON.stringify({
+                type: 'cursor_update',
+                targetClientId: targetId,
+                x, y
+            }));
+        }
     }
     
     handleWatchScreens(watcherId, message) {

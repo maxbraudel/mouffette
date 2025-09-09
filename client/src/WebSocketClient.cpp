@@ -138,6 +138,15 @@ void WebSocketClient::sendStateSnapshot(const QList<ScreenInfo>& screens, int vo
     sendMessage(msg);
 }
 
+void WebSocketClient::sendCursorUpdate(int globalX, int globalY) {
+    if (!isConnected()) return;
+    QJsonObject msg;
+    msg["type"] = "cursor_update";
+    msg["x"] = globalX;
+    msg["y"] = globalY;
+    sendMessage(msg);
+}
+
 void WebSocketClient::onConnected() {
     qDebug() << "Connected to server";
     setConnectionStatus("Connected");
@@ -250,6 +259,13 @@ void WebSocketClient::handleMessage(const QJsonObject& message) {
     }
     else if (type == "data_request") {
         emit dataRequestReceived();
+    }
+    else if (type == "cursor_update") {
+        // Forward to UI with target id context
+        const QString targetId = message.value("targetClientId").toString();
+        const int x = message.value("x").toInt();
+        const int y = message.value("y").toInt();
+        emit cursorPositionReceived(targetId, x, y);
     }
     else {
         // Forward unknown messages

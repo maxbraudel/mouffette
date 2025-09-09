@@ -298,6 +298,7 @@ void MainWindow::showClientListView() {
         m_webSocketClient->unwatchScreens(m_watchedClientId);
         m_watchedClientId.clear();
     }
+    if (m_screenCanvas) m_screenCanvas->hideRemoteCursor();
     // Clear selection without triggering selection change event
     m_ignoreSelectionChange = true;
     m_clientListWidget->clearSelection();
@@ -404,6 +405,12 @@ ScreenCanvas::ScreenCanvas(QWidget* parent)
 #ifndef Q_OS_MACOS
     grabGesture(Qt::PinchGesture);
 #endif
+    // Remote cursor overlay (hidden by default)
+    m_remoteCursorDot = m_scene->addEllipse(0, 0, 10, 10, QPen(QColor(74, 144, 226)), QBrush(Qt::white));
+    if (m_remoteCursorDot) {
+        m_remoteCursorDot->setZValue(10000);
+        m_remoteCursorDot->setVisible(false);
+    }
 }
 
 void ScreenCanvas::setScreens(const QList<ScreenInfo>& screens) {
@@ -442,6 +449,43 @@ void ScreenCanvas::createScreenItems() {
         m_screenItems.append(screenItem);
         m_scene->addItem(screenItem);
     }
+}
+
+void ScreenCanvas::updateRemoteCursor(int globalX, int globalY) {
+    if (!m_remoteCursorDot || m_screens.isEmpty() || m_screenItems.size() != m_screens.size()) {
+        if (m_remoteCursorDot) m_remoteCursorDot->setVisible(false);
+        return;
+    }
+    int idx = -1;
+    int localX = 0, localY = 0;
+    for (int i = 0; i < m_screens.size(); ++i) {
+        const auto& s = m_screens[i];
+        if (globalX >= s.x && globalX < s.x + s.width && globalY >= s.y && globalY < s.y + s.height) {
+            idx = i;
+            localX = globalX - s.x;
+            localY = globalY - s.y;
+            break;
+        }
+    }
+    if (idx < 0) {
+        m_remoteCursorDot->setVisible(false);
+        return;
+    }
+    QGraphicsRectItem* item = m_screenItems[idx];
+    if (!item) { m_remoteCursorDot->setVisible(false); return; }
+    const QRectF r = item->rect();
+    if (m_screens[idx].width <= 0 || m_screens[idx].height <= 0 || r.width() <= 0 || r.height() <= 0) { m_remoteCursorDot->setVisible(false); return; }
+    const double fx = static_cast<double>(localX) / static_cast<double>(m_screens[idx].width);
+    const double fy = static_cast<double>(localY) / static_cast<double>(m_screens[idx].height);
+    const double sceneX = r.left() + fx * r.width();
+    const double sceneY = r.top() + fy * r.height();
+    const double dotSize = 10.0;
+    m_remoteCursorDot->setRect(sceneX - dotSize/2.0, sceneY - dotSize/2.0, dotSize, dotSize);
+    m_remoteCursorDot->setVisible(true);
+}
+
+void ScreenCanvas::hideRemoteCursor() {
+    if (m_remoteCursorDot) m_remoteCursorDot->setVisible(false);
 }
 
 QGraphicsRectItem* ScreenCanvas::createScreenItem(const ScreenInfo& screen, int index, const QRectF& position) {
@@ -818,6 +862,14 @@ void MainWindow::setupUI() {
     
     // Start with client list page
     m_stackedWidget->setCurrentWidget(m_clientListPage);
+
+    // Receive remote cursor updates when watching
+    connect(m_webSocketClient, &WebSocketClient::cursorPositionReceived, this,
+            [this](const QString& targetId, int x, int y) {
+                if (m_stackedWidget->currentWidget() == m_screenViewWidget && targetId == m_watchedClientId && m_screenCanvas) {
+                    m_screenCanvas->updateRemoteCursor(x, y);
+                }
+            });
 }
 
 void MainWindow::createClientListPage() {
@@ -1416,6 +1468,28 @@ void MainWindow::onWatchStatusChanged(bool watched) {
     // For simplicity, keep a static so our timers can read it.
     m_isWatched = watched;
     qDebug() << "Watch status changed:" << (watched ? "watched" : "not watched");
+
+    // Begin/stop sending our cursor position to watchers (target side)
+    if (watched) {
+        if (!m_cursorTimer) {
+            m_cursorTimer = new QTimer(this);
+            m_cursorTimer->setInterval(33); // ~30 fps
+            connect(m_cursorTimer, &QTimer::timeout, this, [this]() {
+                static int lastX = INT_MIN, lastY = INT_MIN;
+                const QPoint p = QCursor::pos();
+                if (p.x() != lastX || p.y() != lastY) {
+                    lastX = p.x();
+                    lastY = p.y();
+                    if (m_webSocketClient && m_webSocketClient->isConnected() && m_isWatched) {
+                        m_webSocketClient->sendCursorUpdate(p.x(), p.y());
+                    }
+                }
+            });
+        }
+        if (!m_cursorTimer->isActive()) m_cursorTimer->start();
+    } else {
+        if (m_cursorTimer) m_cursorTimer->stop();
+    }
 }
 
 QList<ScreenInfo> MainWindow::getLocalScreenInfo() {
