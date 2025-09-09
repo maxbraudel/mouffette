@@ -5,6 +5,7 @@
 #include <QGuiApplication>
 #include <QDebug>
 #include <QCloseEvent>
+#include <QResizeEvent>
 #include <QKeyEvent>
 #include <QStackedWidget>
 #include <algorithm>
@@ -12,6 +13,8 @@
 #include <QDialog>
 #include <QLineEdit>
 #include <QFrame>
+#include <QNativeGestureEvent>
+#include <QCursor>
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -99,9 +102,8 @@ MainWindow::MainWindow(QWidget *parent)
     });
         // (cleaned) avoid duplicate hookups
 #ifdef Q_OS_MACOS
-    setWindowFlags(windowFlags() | Qt::Tool);
-    // Keep tool window visible even when app loses focus (prevents auto-hide on deactivate)
-    setAttribute(Qt::WA_MacAlwaysShowToolWindow, true);
+    // Use a normal window on macOS so the title bar and traffic lights have standard size.
+    // Avoid Qt::Tool/WA_MacAlwaysShowToolWindow which force a tiny utility-chrome window.
 #endif
     
     // Initially disable UI until connected
@@ -260,9 +262,14 @@ ScreenCanvas::ScreenCanvas(QWidget* parent)
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     setBackgroundBrush(QBrush(QColor(45, 45, 45)));
     setRenderHint(QPainter::Antialiasing);
+    // We'll implement zoom-under-cursor ourselves using scrollbars
+    setTransformationAnchor(QGraphicsView::NoAnchor);
+    // When the view is resized, keep the view-centered anchor (we also recenter explicitly on window resize)
+    setResizeAnchor(QGraphicsView::AnchorViewCenter);
     
     // Enable mouse tracking for panning
     setMouseTracking(true);
+    m_lastMousePos = QPoint(0, 0);
     
     // Enable pinch gesture
     grabGesture(Qt::PinchGesture);
@@ -454,6 +461,19 @@ bool ScreenCanvas::event(QEvent* event) {
     if (event->type() == QEvent::Gesture) {
         return gestureEvent(static_cast<QGestureEvent*>(event));
     }
+    // Handle native gestures (e.g., macOS trackpad pinch zoom)
+    if (event->type() == QEvent::NativeGesture) {
+        auto* ng = static_cast<QNativeGestureEvent*>(event);
+        if (ng->gestureType() == Qt::ZoomNativeGesture) {
+            // ng->value() is a delta; use exponential to convert to multiplicative factor
+            const qreal factor = std::pow(2.0, ng->value());
+            // Anchor at the last known mouse cursor position (or center if unknown)
+            QPoint vpPos = m_lastMousePos.isNull() ? viewport()->rect().center() : m_lastMousePos;
+            zoomAroundViewportPos(vpPos, factor);
+            event->accept();
+            return true;
+        }
+    }
     return QGraphicsView::event(event);
 }
 
@@ -462,10 +482,10 @@ bool ScreenCanvas::gestureEvent(QGestureEvent* event) {
         QPinchGesture* pinchGesture = static_cast<QPinchGesture*>(pinch);
         
         if (pinchGesture->changeFlags() & QPinchGesture::ScaleFactorChanged) {
-            qreal scaleFactor = pinchGesture->scaleFactor();
-            
-            // Apply zoom based on pinch scale
-            scale(scaleFactor, scaleFactor);
+            const qreal scaleFactor = pinchGesture->scaleFactor();
+            // Use last known mouse position inside viewport; fallback to center if missing
+            QPoint vpPos = m_lastMousePos.isNull() ? viewport()->rect().center() : m_lastMousePos;
+            zoomAroundViewportPos(vpPos, scaleFactor);
         }
         
         event->accept();
@@ -496,6 +516,8 @@ void ScreenCanvas::mousePressEvent(QMouseEvent* event) {
 }
 
 void ScreenCanvas::mouseMoveEvent(QMouseEvent* event) {
+    // Track last mouse pos in viewport coords (used for zoom anchoring)
+    m_lastMousePos = event->pos();
     if (m_panning) {
         // Pan the view
         QPoint delta = event->pos() - m_lastPanPoint;
@@ -515,18 +537,38 @@ void ScreenCanvas::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void ScreenCanvas::wheelEvent(QWheelEvent* event) {
-    // Prefer pixelDelta for trackpads (gives smooth 2D vector),
-    // fallback to angleDelta for traditional mouse wheels.
-    QPoint numPixels = event->pixelDelta();
-    QPoint numDegrees = event->angleDelta();
-    QPoint delta;
-    if (!numPixels.isNull()) {
-        delta = numPixels; // already in pixels, both axes
-    } else if (!numDegrees.isNull()) {
-        // angleDelta is in eighths of a degree; scale to pixels
-        delta = numDegrees / 8; // small scaling for smoother feel
+    // If Cmd (macOS) or Ctrl (others) is held, treat the wheel as zoom, anchored under cursor
+#ifdef Q_OS_MACOS
+    const bool zoomModifier = event->modifiers().testFlag(Qt::MetaModifier);
+#else
+    const bool zoomModifier = event->modifiers().testFlag(Qt::ControlModifier);
+#endif
+
+    if (zoomModifier) {
+        qreal deltaY = 0.0;
+        if (!event->pixelDelta().isNull()) {
+            deltaY = event->pixelDelta().y();
+        } else if (!event->angleDelta().isNull()) {
+            // angleDelta is in 1/8 degree; 120 typically represents one step
+            deltaY = event->angleDelta().y() / 8.0; // convert to degrees-ish
+        }
+        if (deltaY != 0.0) {
+            // Convert delta to an exponential zoom factor for smoothness
+            const qreal factor = std::pow(1.0015, deltaY);
+            zoomAroundViewportPos(event->position(), factor);
+            event->accept();
+            return;
+        }
     }
 
+    // Default behavior: scroll/pan content
+    // Prefer pixelDelta for trackpads (gives smooth 2D vector), fallback to angleDelta for mouse wheels.
+    QPoint delta;
+    if (!event->pixelDelta().isNull()) {
+        delta = event->pixelDelta();
+    } else if (!event->angleDelta().isNull()) {
+        delta = event->angleDelta() / 8; // small scaling for smoother feel
+    }
     if (!delta.isNull()) {
         horizontalScrollBar()->setValue(horizontalScrollBar()->value() - delta.x());
         verticalScrollBar()->setValue(verticalScrollBar()->value() - delta.y());
@@ -534,6 +576,22 @@ void ScreenCanvas::wheelEvent(QWheelEvent* event) {
         return;
     }
     QGraphicsView::wheelEvent(event);
+}
+
+void ScreenCanvas::zoomAroundViewportPos(const QPointF& vpPosF, qreal factor) {
+    QPoint vpPos = vpPosF.toPoint();
+    if (!viewport()->rect().contains(vpPos)) {
+        vpPos = viewport()->rect().center();
+    }
+    const QPointF before = mapToScene(vpPos);
+    const auto oldAnchor = transformationAnchor();
+    setTransformationAnchor(QGraphicsView::NoAnchor);
+    scale(factor, factor);
+    setTransformationAnchor(oldAnchor);
+    const QPointF after = mapToScene(vpPos);
+    const QPointF delta = after - before;
+    const QPointF currentCenter = mapToScene(viewport()->rect().center());
+    centerOn(currentCenter - delta);
 }
 
 MainWindow::~MainWindow() {
@@ -793,6 +851,17 @@ void MainWindow::closeEvent(QCloseEvent *event) {
         }
     } else {
         event->accept();
+    }
+}
+
+void MainWindow::resizeEvent(QResizeEvent *event) {
+    QMainWindow::resizeEvent(event);
+    
+    // If we're currently showing the screen view and have a canvas with content,
+    // recenter the view to maintain good visibility after window resize
+    if (m_stackedWidget && m_stackedWidget->currentWidget() == m_screenViewWidget && 
+        m_screenCanvas && !m_selectedClient.getScreens().isEmpty()) {
+        m_screenCanvas->recenterWithMargin(33);
     }
 }
 

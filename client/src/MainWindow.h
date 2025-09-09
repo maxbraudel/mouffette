@@ -13,6 +13,7 @@
 #include <QApplication>
 #include <QSystemTrayIcon>
 #include <QCloseEvent>
+#include <QResizeEvent>
 #include <QScrollArea>
 #include <QWidget>
 #include <QEvent>
@@ -62,11 +63,13 @@ private:
     QList<ScreenInfo> m_screens;
     bool m_panning;
     QPoint m_lastPanPoint;
+    QPoint m_lastMousePos;
     
     void createScreenItems();
     QGraphicsRectItem* createScreenItem(const ScreenInfo& screen, int index, const QRectF& position);
     QMap<int, QRectF> calculateCompactPositions(double scaleFactor, double spacing) const;
     QRectF screensBoundingRect() const;
+    void zoomAroundViewportPos(const QPointF& vpPos, qreal factor);
 };
 
 class MainWindow : public QMainWindow {
@@ -99,6 +102,7 @@ private slots:
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
     bool eventFilter(QObject* obj, QEvent* event) override;
 
 private:
