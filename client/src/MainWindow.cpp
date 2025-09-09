@@ -921,16 +921,20 @@ void ScreenCanvas::dropEvent(QDropEvent* event) {
 }
 
 QGraphicsRectItem* ScreenCanvas::createScreenItem(const ScreenInfo& screen, int index, const QRectF& position) {
-    // Use the provided compact position instead of OS coordinates
-    QGraphicsRectItem* item = new QGraphicsRectItem(position);
+    // Border must be fully inside so the outer size matches the logical screen size.
+    const int penWidth = m_screenBorderWidthPx; // configurable
+    // Inset the rect by half the pen width so the stroke stays entirely inside.
+    QRectF inner = position.adjusted(penWidth / 2.0, penWidth / 2.0,
+                                     -penWidth / 2.0, -penWidth / 2.0);
+    QGraphicsRectItem* item = new QGraphicsRectItem(inner);
     
     // Set appearance
     if (screen.primary) {
         item->setBrush(QBrush(QColor(74, 144, 226, 180))); // Primary screen - blue
-        item->setPen(QPen(QColor(74, 144, 226), 3));
+        item->setPen(QPen(QColor(74, 144, 226), penWidth));
     } else {
         item->setBrush(QBrush(QColor(80, 80, 80, 180))); // Secondary screen - gray
-        item->setPen(QPen(QColor(160, 160, 160), 2));
+        item->setPen(QPen(QColor(160, 160, 160), penWidth));
     }
     
     // Store screen index for click handling
@@ -951,6 +955,29 @@ QGraphicsRectItem* ScreenCanvas::createScreenItem(const ScreenInfo& screen, int 
     label->setParentItem(item);
     
     return item;
+}
+
+void ScreenCanvas::setScreenBorderWidthPx(int px) {
+    m_screenBorderWidthPx = qMax(0, px);
+    // Update existing screen items to keep the same outer size while drawing the stroke fully inside
+    // We know m_screenItems aligns with m_screens by index after createScreenItems().
+    if (!m_scene) return;
+    for (int i = 0; i < m_screenItems.size() && i < m_screens.size(); ++i) {
+        QGraphicsRectItem* item = m_screenItems[i];
+        if (!item) continue;
+        const int penW = m_screenBorderWidthPx;
+        // Compute the outer rect from the current item rect by reversing the previous inset.
+        // Previous inset may differ; reconstruct outer by expanding by old half-pen, then re-inset by new half-pen.
+        // Since we don't track the old pen per-item, approximate using current pen width on the item.
+        int oldPenW = static_cast<int>(item->pen().widthF());
+        QRectF currentInner = item->rect();
+        QRectF outer = currentInner.adjusted(-(oldPenW/2.0), -(oldPenW/2.0), (oldPenW/2.0), (oldPenW/2.0));
+        QRectF newInner = outer.adjusted(penW/2.0, penW/2.0, -penW/2.0, -penW/2.0);
+        item->setRect(newInner);
+        QPen p = item->pen();
+        p.setWidthF(penW);
+        item->setPen(p);
+    }
 }
 
 QMap<int, QRectF> ScreenCanvas::calculateCompactPositions(double scaleFactor, double spacing) const {

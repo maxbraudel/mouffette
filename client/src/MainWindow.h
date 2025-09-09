@@ -58,6 +58,8 @@ public:
     void setMediaHandleVisualSizePx(int px);    // drawn square size
     // Back-compat helper: set both at once
     void setMediaHandleSizePx(int px);
+    // Screen border thickness (in pixels). Changing this updates existing screen items.
+    void setScreenBorderWidthPx(int px);
 
 signals:
 
@@ -91,6 +93,8 @@ private:
     // Resize handle sizes for media items
     int m_mediaHandleSelectionSizePx = 30; // large hit area by default
     int m_mediaHandleVisualSizePx = 12;     // smaller visual indicator
+    // Screen border thickness (px). Applied fully inside the screen rect.
+    int m_screenBorderWidthPx = 1;
     
     void createScreenItems();
     QGraphicsRectItem* createScreenItem(const ScreenInfo& screen, int index, const QRectF& position);
