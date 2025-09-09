@@ -309,11 +309,18 @@ protected:
 
     QVariant itemChange(GraphicsItemChange change, const QVariant &value) override {
         if (change == ItemSelectedChange) {
-            // When selection changes, update geometry to include/exclude handle zones
+            // Include/exclude handle zones (affects bounding/shape)
             prepareGeometryChange();
+            // Pre-toggle visibility to match new state
+            if (m_labelBg && m_labelText) {
+                const bool willBeSelected = value.toBool();
+                const bool show = willBeSelected && !m_filename.isEmpty();
+                m_labelBg->setVisible(show);
+                m_labelText->setVisible(show);
+            }
         }
         if (change == ItemSelectedHasChanged) {
-            // Update label visibility when selection toggles
+            // Keep label properly positioned after selection changes
             updateLabelLayout();
         }
         return QGraphicsPixmapItem::itemChange(change, value);
@@ -1042,6 +1049,21 @@ void ScreenCanvas::recenterWithMargin(int marginPx) {
 }
 
 void ScreenCanvas::keyPressEvent(QKeyEvent* event) {
+    // Delete selected media items
+    if (event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) {
+        if (m_scene) {
+            const QList<QGraphicsItem*> sel = m_scene->selectedItems();
+            for (QGraphicsItem* it : sel) {
+                if (auto* rp = dynamic_cast<ResizablePixmapItem*>(it)) {
+                    rp->ungrabMouse();
+                    m_scene->removeItem(rp);
+                    delete rp;
+                }
+            }
+        }
+        event->accept();
+        return;
+    }
     if (event->key() == Qt::Key_Space) {
         recenterWithMargin(53);
         event->accept();
