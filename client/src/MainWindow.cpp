@@ -220,19 +220,26 @@ public:
 
     QRectF boundingRect() const override {
         QRectF br(0, 0, m_baseSize.width(), m_baseSize.height());
-    qreal pad = toItemLengthFromPixels(m_selectionSize) / 2.0;
-        return br.adjusted(-pad, -pad, pad, pad);
+        // Only extend bounding rect for handle hit zones when selected
+        if (isSelected()) {
+            qreal pad = toItemLengthFromPixels(m_selectionSize) / 2.0;
+            return br.adjusted(-pad, -pad, pad, pad);
+        }
+        return br;
     }
 
     QPainterPath shape() const override {
         QPainterPath path;
         QRectF br(0, 0, m_baseSize.width(), m_baseSize.height());
         path.addRect(br);
-    const qreal s = toItemLengthFromPixels(m_selectionSize);
-        path.addRect(QRectF(br.topLeft() - QPointF(s/2,s/2), QSizeF(s,s)));
-        path.addRect(QRectF(QPointF(br.right(), br.top()) - QPointF(s/2,s/2), QSizeF(s,s)));
-        path.addRect(QRectF(QPointF(br.left(), br.bottom()) - QPointF(s/2,s/2), QSizeF(s,s)));
-        path.addRect(QRectF(br.bottomRight() - QPointF(s/2,s/2), QSizeF(s,s)));
+        // Only add handle hit zones when selected
+        if (isSelected()) {
+            const qreal s = toItemLengthFromPixels(m_selectionSize);
+            path.addRect(QRectF(br.topLeft() - QPointF(s/2,s/2), QSizeF(s,s)));
+            path.addRect(QRectF(QPointF(br.right(), br.top()) - QPointF(s/2,s/2), QSizeF(s,s)));
+            path.addRect(QRectF(QPointF(br.left(), br.bottom()) - QPointF(s/2,s/2), QSizeF(s,s)));
+            path.addRect(QRectF(br.bottomRight() - QPointF(s/2,s/2), QSizeF(s,s)));
+        }
         return path;
     }
 
@@ -244,7 +251,7 @@ protected:
         if (!pixmap().isNull()) {
             painter->drawPixmap(QPointF(0, 0), pixmap());
         }
-        // Draw a tight selection border hugging the image only
+        // Draw selection border and handles ONLY when selected
         if (isSelected()) {
             QRectF br(0, 0, m_baseSize.width(), m_baseSize.height());
             painter->save();
@@ -270,7 +277,7 @@ protected:
             painter->setPen(bluePen);
             painter->drawRect(br);
             painter->restore();
-            // Corner handles (visual squares)
+            // Corner handles (visual squares) - only visible when selected
             const qreal s = toItemLengthFromPixels(m_visualSize);
             painter->setPen(QPen(QColor(74,144,226), 0));
             painter->setBrush(QBrush(Qt::white));
@@ -279,6 +286,14 @@ protected:
             painter->drawRect(QRectF(QPointF(br.left(), br.bottom()) - QPointF(s/2,s/2), QSizeF(s,s)));
             painter->drawRect(QRectF(br.bottomRight() - QPointF(s/2,s/2), QSizeF(s,s)));
         }
+    }
+
+    QVariant itemChange(GraphicsItemChange change, const QVariant &value) override {
+        if (change == ItemSelectedChange) {
+            // When selection changes, update geometry to include/exclude handle zones
+            prepareGeometryChange();
+        }
+        return QGraphicsPixmapItem::itemChange(change, value);
     }
 
     void mousePressEvent(QGraphicsSceneMouseEvent* event) override {
@@ -346,12 +361,15 @@ private:
     Handle m_lastHoverHandle = None;
 
     Handle hitTestHandle(const QPointF& p) const {
+        // Only allow handle interaction when selected
+        if (!isSelected()) return None;
+        
         const qreal s = toItemLengthFromPixels(m_selectionSize); // selection square centered on corners
         QRectF br(0, 0, m_baseSize.width(), m_baseSize.height());
-    if (QRectF(br.topLeft() - QPointF(s/2,s/2), QSizeF(s,s)).contains(p)) return TopLeft;
-    if (QRectF(QPointF(br.right(), br.top()) - QPointF(s/2,s/2), QSizeF(s,s)).contains(p)) return TopRight;
-    if (QRectF(QPointF(br.left(), br.bottom()) - QPointF(s/2,s/2), QSizeF(s,s)).contains(p)) return BottomLeft;
-    if (QRectF(br.bottomRight() - QPointF(s/2,s/2), QSizeF(s,s)).contains(p)) return BottomRight;
+        if (QRectF(br.topLeft() - QPointF(s/2,s/2), QSizeF(s,s)).contains(p)) return TopLeft;
+        if (QRectF(QPointF(br.right(), br.top()) - QPointF(s/2,s/2), QSizeF(s,s)).contains(p)) return TopRight;
+        if (QRectF(QPointF(br.left(), br.bottom()) - QPointF(s/2,s/2), QSizeF(s,s)).contains(p)) return BottomLeft;
+        if (QRectF(br.bottomRight() - QPointF(s/2,s/2), QSizeF(s,s)).contains(p)) return BottomRight;
         return None;
     }
     // No global override cursor helpers needed with per-item cursors
@@ -1014,18 +1032,19 @@ bool ScreenCanvas::gestureEvent(QGestureEvent* event) {
 void ScreenCanvas::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
         // Try to start resize on the topmost media item whose handle contains the point
+        // BUT only if the item is already selected
         const QPointF scenePos = mapToScene(event->pos());
         ResizablePixmapItem* topHandleItem = nullptr;
         qreal topZ = -std::numeric_limits<qreal>::infinity();
         for (QGraphicsItem* it : m_scene->items()) {
             if (auto* rp = dynamic_cast<ResizablePixmapItem*>(it)) {
-                if (rp->isOnHandleAtItemPos(rp->mapFromScene(scenePos))) {
+                // Only allow resize if item is selected
+                if (rp->isSelected() && rp->isOnHandleAtItemPos(rp->mapFromScene(scenePos))) {
                     if (rp->zValue() > topZ) { topZ = rp->zValue(); topHandleItem = rp; }
                 }
             }
         }
         if (topHandleItem) {
-            topHandleItem->setSelected(true);
             if (topHandleItem->beginResizeAtScenePos(scenePos)) {
                 // Set resize cursor during active resize
                 Qt::CursorShape cursor = topHandleItem->cursorForScenePos(scenePos);
@@ -1059,15 +1078,17 @@ void ScreenCanvas::mouseMoveEvent(QMouseEvent* event) {
     
     // PRIORITY: Check if we're over a resize handle and set cursor accordingly
     // This must be done BEFORE any other cursor management to ensure it's not overridden
+    // BUT only if the item is selected!
     const QPointF scenePos = mapToScene(event->pos());
     Qt::CursorShape resizeCursor = Qt::ArrowCursor;
     bool onResizeHandle = false;
     
-    // Check all ResizablePixmapItems for handle hover (prioritize topmost)
+    // Check all ResizablePixmapItems for handle hover (prioritize topmost, only if selected)
     qreal topZ = -std::numeric_limits<qreal>::infinity();
     for (QGraphicsItem* it : m_scene->items()) {
         if (auto* rp = dynamic_cast<ResizablePixmapItem*>(it)) {
-            if (rp->zValue() >= topZ) {
+            // Only show resize cursor if the item is selected
+            if (rp->isSelected() && rp->zValue() >= topZ) {
                 Qt::CursorShape itemCursor = rp->cursorForScenePos(scenePos);
                 if (itemCursor != Qt::ArrowCursor) {
                     resizeCursor = itemCursor;
