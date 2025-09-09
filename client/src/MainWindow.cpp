@@ -30,6 +30,9 @@
 #include <QUrl>
 #include <QImage>
 #include <QPixmap>
+#include <QGraphicsTextItem>
+#include <QGraphicsRectItem>
+#include <QFileInfo>
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -149,7 +152,7 @@ private:
 // Resizable, movable pixmap item with corner handles; keeps aspect ratio
 class ResizablePixmapItem : public QGraphicsPixmapItem {
 public:
-    explicit ResizablePixmapItem(const QPixmap& pm, int visualSizePx, int selectionSizePx)
+    explicit ResizablePixmapItem(const QPixmap& pm, int visualSizePx, int selectionSizePx, const QString& filename = QString())
         : QGraphicsPixmapItem(pm)
     {
         m_visualSize = qMax(4, visualSizePx);
@@ -159,6 +162,20 @@ public:
         m_baseSize = pm.size();
         setScale(1.0);
         setZValue(1.0);
+        // Filename label setup (zoom-independent via ItemIgnoresTransformations)
+        m_filename = filename;
+        m_labelBg = new QGraphicsRectItem(this);
+        m_labelBg->setPen(Qt::NoPen);
+        m_labelBg->setBrush(QColor(0,0,0,160));
+        m_labelBg->setZValue(100.0);
+        m_labelBg->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+        m_labelBg->setAcceptedMouseButtons(Qt::NoButton);
+        m_labelText = new QGraphicsTextItem(m_filename, m_labelBg);
+        m_labelText->setDefaultTextColor(Qt::white);
+        m_labelText->setZValue(101.0);
+        m_labelText->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+        m_labelText->setAcceptedMouseButtons(Qt::NoButton);
+        updateLabelLayout();
     }
     // Utility for view: tell if a given item-space pos is on a resize handle
     bool isOnHandleAtItemPos(const QPointF& itemPos) const {
@@ -247,6 +264,8 @@ protected:
     void paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget* widget) override {
         Q_UNUSED(option);
         Q_UNUSED(widget);
+    // Keep the filename label positioned each paint (handles zoom/transform changes)
+    updateLabelLayout();
         // Draw the pixmap ourselves to avoid default selection border around boundingRect
         if (!pixmap().isNull()) {
             painter->drawPixmap(QPointF(0, 0), pixmap());
@@ -292,6 +311,10 @@ protected:
         if (change == ItemSelectedChange) {
             // When selection changes, update geometry to include/exclude handle zones
             prepareGeometryChange();
+        }
+        if (change == ItemSelectedHasChanged) {
+            // Update label visibility when selection toggles
+            updateLabelLayout();
         }
         return QGraphicsPixmapItem::itemChange(change, value);
     }
@@ -359,6 +382,10 @@ private:
     int m_visualSize = 8;
     int m_selectionSize = 12;
     Handle m_lastHoverHandle = None;
+    // Filename label elements
+    QString m_filename;
+    QGraphicsRectItem* m_labelBg = nullptr;
+    QGraphicsTextItem* m_labelText = nullptr;
 
     Handle hitTestHandle(const QPointF& p) const {
         // Only allow handle interaction when selected
@@ -401,6 +428,49 @@ private:
         if (sx <= 1e-6) return px;
         // Convert device pixels to item units
         return px / sx;
+    }
+
+    void updateLabelLayout() {
+        if (!m_labelBg || !m_labelText) return;
+        const bool show = !m_filename.isEmpty() && isSelected();
+        m_labelBg->setVisible(show);
+        m_labelText->setVisible(show);
+        if (!show) return;
+
+        // Padding and vertical gap in pixels
+        const int padXpx = 8;
+        const int padYpx = 4;
+        const int gapPx  = 8;
+        // Update text and background sizes (in px, unaffected by zoom)
+        m_labelText->setPlainText(m_filename);
+        QRectF tr = m_labelText->boundingRect();
+        const qreal bgW = tr.width() + 2*padXpx;
+        const qreal bgH = tr.height() + 2*padYpx;
+        m_labelBg->setRect(0, 0, bgW, bgH);
+        m_labelText->setPos(padXpx, padYpx);
+
+        // Position: center above image top edge
+        if (!scene() || scene()->views().isEmpty()) {
+            // Fallback using item-units conversion
+            const qreal wItem = toItemLengthFromPixels(static_cast<int>(std::round(bgW)));
+            const qreal hItem = toItemLengthFromPixels(static_cast<int>(std::round(bgH)));
+            const qreal gapItem = toItemLengthFromPixels(gapPx);
+            const qreal xItem = (m_baseSize.width() - wItem) / 2.0;
+            const qreal yItem = - (hItem + gapItem);
+            m_labelBg->setPos(xItem, yItem);
+            return;
+        }
+        QGraphicsView* v = scene()->views().first();
+        // Parent top-center in viewport coords
+        QPointF topCenterItem(m_baseSize.width()/2.0, 0.0);
+        QPointF topCenterScene = mapToScene(topCenterItem);
+        QPointF topCenterView = v->mapFromScene(topCenterScene);
+        // Desired top-left of label in viewport (pixels)
+        QPointF labelTopLeftView = topCenterView - QPointF(bgW/2.0, gapPx + bgH);
+        // Map back to item coords
+        QPointF labelTopLeftScene = v->mapToScene(labelTopLeftView.toPoint());
+        QPointF labelTopLeftItem = mapFromScene(labelTopLeftScene);
+        m_labelBg->setPos(labelTopLeftItem);
     }
 };
 
@@ -807,14 +877,19 @@ void ScreenCanvas::dragMoveEvent(QDragMoveEvent* event) {
 
 void ScreenCanvas::dropEvent(QDropEvent* event) {
     QImage image;
+    QString filename;
     if (event->mimeData()->hasImage()) {
         image = qvariant_cast<QImage>(event->mimeData()->imageData());
+        filename = "pasted-image";
     } else if (event->mimeData()->hasUrls()) {
         const auto urls = event->mimeData()->urls();
         if (!urls.isEmpty()) {
             const QUrl& url = urls.first();
             const QString path = url.toLocalFile();
-            if (!path.isEmpty()) image.load(path);
+            if (!path.isEmpty()) {
+                image.load(path);
+                filename = QFileInfo(path).fileName();
+            }
         }
     }
     if (image.isNull()) {
@@ -824,7 +899,7 @@ void ScreenCanvas::dropEvent(QDropEvent* event) {
     // Create pixmap item; scale dimensions from device pixels to scene units using m_scaleFactor
     const double w = image.width() * m_scaleFactor;
     const double h = image.height() * m_scaleFactor;
-    QGraphicsPixmapItem* item = new ResizablePixmapItem(QPixmap::fromImage(image), m_mediaHandleVisualSizePx, m_mediaHandleSelectionSizePx);
+    QGraphicsPixmapItem* item = new ResizablePixmapItem(QPixmap::fromImage(image), m_mediaHandleVisualSizePx, m_mediaHandleSelectionSizePx, filename);
     item->setFlags(QGraphicsItem::ItemIsMovable | QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemSendsGeometryChanges);
     // Position at drop scene position, centering the image
     const QPointF scenePos = mapToScene(event->position().toPoint());
