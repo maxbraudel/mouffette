@@ -12,7 +12,6 @@
 #include <cmath>
 #include <QDialog>
 #include <QLineEdit>
-#include <QFrame>
 #include <QNativeGestureEvent>
 #include <QCursor>
 #ifdef Q_OS_WIN
@@ -116,7 +115,6 @@ MainWindow::MainWindow(QWidget *parent)
 
 void MainWindow::showScreenView(const ClientInfo& client) {
     qDebug() << "showScreenView called for client:" << client.getMachineName();
-        QLabel* status = new QLabel(m_webSocketClient->getConnectionStatus());
     // Update client name
     m_clientNameLabel->setText(QString("%1 (%2)").arg(client.getMachineName()).arg(client.getPlatform()));
     
@@ -239,14 +237,6 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
             }
         }
     }
-    if (event->type() == QEvent::MouseButtonPress) {
-        QWidget* widget = qobject_cast<QWidget*>(obj);
-        if (widget && widget->property("screenIndex").isValid()) {
-            int screenIndex = widget->property("screenIndex").toInt();
-            onScreenClicked(screenIndex);
-            return true;
-        }
-    }
     return QMainWindow::eventFilter(obj, event);
 }
 
@@ -308,7 +298,7 @@ void ScreenCanvas::clearScreens() {
 }
 
 void ScreenCanvas::createScreenItems() {
-    const double SCALE_FACTOR = 0.2; // Scale down screens to 20% of their actual size
+    const double SCALE_FACTOR = 0.2; // Scale factor used for compact positions
     const double SCREEN_SPACING = 5.0; // Small gap between adjacent screens
     
     // Calculate compact positioning
@@ -323,8 +313,6 @@ void ScreenCanvas::createScreenItems() {
 }
 
 QGraphicsRectItem* ScreenCanvas::createScreenItem(const ScreenInfo& screen, int index, const QRectF& position) {
-    const double SCALE_FACTOR = 0.2;
-    
     // Use the provided compact position instead of OS coordinates
     QGraphicsRectItem* item = new QGraphicsRectItem(position);
     
@@ -364,9 +352,7 @@ QMap<int, QRectF> ScreenCanvas::calculateCompactPositions(double scaleFactor, do
         return positions;
     }
     
-    // Group screens by their relative positioning
-    // For now, implement a simple left-to-right, top-to-bottom layout
-    // that maintains relative positioning but with minimal gaps
+    // Simple left-to-right, top-to-bottom compact layout
     
     // First, sort screens by their actual position (left to right, then top to bottom)
     QList<QPair<int, ScreenInfo>> screenPairs;
@@ -431,10 +417,7 @@ QRectF ScreenCanvas::screensBoundingRect() const {
 void ScreenCanvas::recenterWithMargin(int marginPx) {
     QRectF bounds = screensBoundingRect();
     if (bounds.isNull() || !bounds.isValid()) return;
-    // Compute a scale that fits the scene bounds into the viewport while leaving
-    // a fixed pixel margin (marginPx) around the content in view coordinates.
-    // Instead of converting margin using the current scale (which changes after fit),
-    // derive the scale from the viewport size minus the desired margins so it works in one pass.
+    // Fit content with a fixed pixel margin in the viewport
     const QSize vp = viewport() ? viewport()->size() : size();
     const qreal availW = static_cast<qreal>(vp.width())  - 2.0 * marginPx;
     const qreal availH = static_cast<qreal>(vp.height()) - 2.0 * marginPx;
@@ -475,7 +458,7 @@ bool ScreenCanvas::event(QEvent* event) {
         return gestureEvent(static_cast<QGestureEvent*>(event));
 #endif
     }
-    // Handle native gestures (e.g., macOS trackpad pinch zoom)
+    // Handle native gestures (macOS trackpad pinch)
     if (event->type() == QEvent::NativeGesture) {
         auto* ng = static_cast<QNativeGestureEvent*>(event);
         if (ng->gestureType() == Qt::ZoomNativeGesture) {
@@ -508,15 +491,12 @@ bool ScreenCanvas::gestureEvent(QGestureEvent* event) {
     return false; // handled via NativeGesture on macOS
 #endif
     if (QGesture* pinch = event->gesture(Qt::PinchGesture)) {
-        QPinchGesture* pinchGesture = static_cast<QPinchGesture*>(pinch);
-        
+        auto* pinchGesture = static_cast<QPinchGesture*>(pinch);
         if (pinchGesture->changeFlags() & QPinchGesture::ScaleFactorChanged) {
-            const qreal scaleFactor = pinchGesture->scaleFactor();
-            // Use last known mouse position inside viewport; fallback to center if missing
-            QPoint vpPos = m_lastMousePos.isNull() ? viewport()->rect().center() : m_lastMousePos;
-            zoomAroundViewportPos(vpPos, scaleFactor);
+            const qreal factor = pinchGesture->scaleFactor();
+            const QPoint anchor = m_lastMousePos.isNull() ? viewport()->rect().center() : m_lastMousePos;
+            zoomAroundViewportPos(anchor, factor);
         }
-        
         event->accept();
         return true;
     }
