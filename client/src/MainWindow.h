@@ -91,7 +91,8 @@ private slots:
     void onClientSelectionChanged();
     void onClientItemClicked(QListWidgetItem* item);
     void updateConnectionStatus();
-    void onConnectToggleClicked();
+    void onEnableDisableClicked();
+    void attemptReconnect();
     
     // Screen view slots
     void onBackToClientListClicked();
@@ -116,6 +117,7 @@ private:
     void setupSystemTray();
     void connectToServer();
     void showSettingsDialog();
+    void scheduleReconnect();
     // Sync local display/machine info with the server (used on connect and on display changes)
     void syncRegistration();
     QList<ScreenInfo> getLocalScreenInfo();
@@ -163,6 +165,7 @@ private:
     QLabel* m_clientNameLabel;
     ScreenCanvas* m_screenCanvas;
     QLabel* m_volumeIndicator;
+    QLabel* m_loadingIndicator;
     QPushButton* m_sendButton;
     QPushButton* m_backButton;
     
@@ -182,6 +185,10 @@ private:
     ClientInfo m_selectedClient;
     QTimer* m_statusUpdateTimer;
     QTimer* m_displaySyncTimer;
+    // Smart reconnection system
+    QTimer* m_reconnectTimer;
+    int m_reconnectAttempts;
+    int m_maxReconnectDelay;
     bool m_isWatched = false; // true when at least one remote client is watching us
     bool m_userDisconnected = false; // suppress auto-reconnect UI flows when true
     QString m_serverUrlConfig; // configurable server URL

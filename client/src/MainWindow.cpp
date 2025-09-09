@@ -14,6 +14,7 @@
 #include <QLineEdit>
 #include <QNativeGestureEvent>
 #include <QCursor>
+#include <QRandomGenerator>
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -99,6 +100,14 @@ MainWindow::MainWindow(QWidget *parent)
     connect(qApp, &QGuiApplication::screenRemoved, this, [this](QScreen*) {
         m_displaySyncTimer->start();
     });
+
+    // Smart reconnection system with exponential backoff
+    m_reconnectTimer = new QTimer(this);
+    m_reconnectTimer->setSingleShot(true);
+    m_reconnectAttempts = 0;
+    m_maxReconnectDelay = 60000; // Max 60 seconds between attempts
+    connect(m_reconnectTimer, &QTimer::timeout, this, &MainWindow::attemptReconnect);
+
         // (cleaned) avoid duplicate hookups
 #ifdef Q_OS_MACOS
     // Use a normal window on macOS so the title bar and traffic lights have standard size.
@@ -118,25 +127,23 @@ void MainWindow::showScreenView(const ClientInfo& client) {
     // Update client name
     m_clientNameLabel->setText(QString("%1 (%2)").arg(client.getMachineName()).arg(client.getPlatform()));
     
-    // Do not show cached screens; wait for fresh data
-    if (m_screenCanvas) m_screenCanvas->clearScreens();
+    // Show loading indicator and hide canvas and volume while waiting for data
+    if (m_loadingIndicator) m_loadingIndicator->show();
+    if (m_volumeIndicator) m_volumeIndicator->hide();
+    if (m_screenCanvas) {
+        m_screenCanvas->clearScreens();
+        m_screenCanvas->hide();
+    }
+    
     // Request fresh screen info on demand
     if (!client.getId().isEmpty()) {
         m_webSocketClient->requestScreens(client.getId());
     }
     
-    // Update volume indicator (placeholder for now)
-    updateVolumeIndicator();
-    
     // Switch to screen view page
     m_stackedWidget->setCurrentWidget(m_screenViewWidget);
     // Show back button when on screen view
     if (m_backButton) m_backButton->show();
-    // Move focus to canvas and recenter with margin
-    if (m_screenCanvas) {
-        m_screenCanvas->setFocus(Qt::OtherFocusReason);
-        m_screenCanvas->recenterWithMargin(33);
-    }
     
     // Start watching this client's screens for real-time updates
     if (m_webSocketClient && m_webSocketClient->isConnected()) {
@@ -192,9 +199,9 @@ void MainWindow::updateVolumeIndicator() {
     QString text;
     if (vol >= 0) {
         QString icon = (vol == 0) ? "🔇" : (vol < 34 ? "🔈" : (vol < 67 ? "🔉" : "🔊"));
-        text = QString("%1 Volume: %2%%").arg(icon).arg(vol);
+        text = QString("%1 %2%").arg(icon).arg(vol);
     } else {
-        text = QString("🔈 Volume: --");
+        text = QString("🔈 --");
     }
     m_volumeIndicator->setText(text);
 }
@@ -644,11 +651,11 @@ void MainWindow::setupUI() {
     m_connectionStatusLabel = new QLabel("DISCONNECTED");
     m_connectionStatusLabel->setStyleSheet("QLabel { color: red; font-weight: bold; }");
 
-    // Connect toggle button with fixed width (left of Settings)
-    m_connectToggleButton = new QPushButton("Connect");
+    // Enable/Disable toggle button with fixed width (left of Settings)
+    m_connectToggleButton = new QPushButton("Disable");
     m_connectToggleButton->setStyleSheet("QPushButton { padding: 8px 16px; font-weight: bold; }");
     m_connectToggleButton->setFixedWidth(111);
-    connect(m_connectToggleButton, &QPushButton::clicked, this, &MainWindow::onConnectToggleClicked);
+    connect(m_connectToggleButton, &QPushButton::clicked, this, &MainWindow::onEnableDisableClicked);
 
     // Settings button
     m_settingsButton = new QPushButton("Settings");
@@ -758,7 +765,7 @@ void MainWindow::createScreenViewPage() {
     m_clientNameLabel->setStyleSheet("QLabel { font-size: 16px; font-weight: bold; color: palette(text); }");
     m_clientNameLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
 
-    m_volumeIndicator = new QLabel("🔈 Volume: --");
+    m_volumeIndicator = new QLabel("🔈 --");
     m_volumeIndicator->setStyleSheet("QLabel { font-size: 16px; color: palette(text); font-weight: bold; }");
     m_volumeIndicator->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     m_volumeIndicator->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
@@ -769,6 +776,25 @@ void MainWindow::createScreenViewPage() {
     headerLayout->setContentsMargins(0, 0, 0, 0);
 
     m_screenViewLayout->addLayout(headerLayout);
+    
+    // Loading indicator (initially hidden)
+    m_loadingIndicator = new QLabel("Loading screen information...");
+    m_loadingIndicator->setStyleSheet(
+        "QLabel { "
+        "   font-size: 16px; "
+        "   color: palette(text); "
+        "   padding: 20px; "
+        "   text-align: center; "
+        "   background-color: palette(base); "
+        "   border: 1px solid palette(mid); "
+        "   border-radius: 5px; "
+        "}"
+    );
+    m_loadingIndicator->setAlignment(Qt::AlignCenter);
+    m_loadingIndicator->setMinimumHeight(400);
+    m_loadingIndicator->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    m_loadingIndicator->hide(); // Initially hidden
+    m_screenViewLayout->addWidget(m_loadingIndicator, 1);
     
     // Canvas container with styling to match client list widget
     m_screenCanvas = new ScreenCanvas();
@@ -921,16 +947,23 @@ void MainWindow::showTrayMessage(const QString& title, const QString& message) {
     }
 }
 
-void MainWindow::onConnectToggleClicked() {
+void MainWindow::onEnableDisableClicked() {
     if (!m_webSocketClient) return;
-    if (m_webSocketClient->isConnected()) {
+    
+    if (m_connectToggleButton->text() == "Disable") {
+        // Disable client: disconnect and prevent auto-reconnect
         m_userDisconnected = true;
-        m_webSocketClient->disconnect();
-        if (m_connectToggleButton) m_connectToggleButton->setText("Connect");
+        m_reconnectTimer->stop(); // Stop any pending reconnection
+        if (m_webSocketClient->isConnected()) {
+            m_webSocketClient->disconnect();
+        }
+        m_connectToggleButton->setText("Enable");
     } else {
+        // Enable client: allow connections and start connecting
         m_userDisconnected = false;
+        m_reconnectAttempts = 0; // Reset reconnection attempts
         connectToServer();
-        if (m_connectToggleButton) m_connectToggleButton->setText("Disconnect");
+        m_connectToggleButton->setText("Disable");
     }
 }
 
@@ -980,9 +1013,38 @@ void MainWindow::connectToServer() {
     m_webSocketClient->connectToServer(url);
 }
 
+void MainWindow::scheduleReconnect() {
+    if (m_userDisconnected) {
+        return; // Don't reconnect if user disabled the client
+    }
+    
+    // Exponential backoff: 2^attempts seconds, capped at maxReconnectDelay
+    int delay = qMin(static_cast<int>(qPow(2, m_reconnectAttempts)) * 1000, m_maxReconnectDelay);
+    
+    // Add some jitter to avoid thundering herd (±25%)
+    int jitter = QRandomGenerator::global()->bounded(-delay/4, delay/4);
+    delay += jitter;
+    
+    qDebug() << "Scheduling reconnect attempt" << (m_reconnectAttempts + 1) << "in" << delay << "ms";
+    
+    m_reconnectTimer->start(delay);
+    m_reconnectAttempts++;
+}
+
+void MainWindow::attemptReconnect() {
+    if (m_userDisconnected) {
+        return; // Don't reconnect if user disabled the client
+    }
+    
+    qDebug() << "Attempting reconnection...";
+    connectToServer();
+}
+
 void MainWindow::onConnected() {
     setUIEnabled(true);
-    if (m_connectToggleButton) m_connectToggleButton->setText("Disconnect");
+    // Reset reconnection state on successful connection
+    m_reconnectAttempts = 0;
+    m_reconnectTimer->stop();
     
     // Sync this client's info with the server
     syncRegistration();
@@ -995,7 +1057,11 @@ void MainWindow::onConnected() {
 
 void MainWindow::onDisconnected() {
     setUIEnabled(false);
-    if (m_connectToggleButton) m_connectToggleButton->setText("Connect");
+    
+    // Start smart reconnection if client is enabled and not manually disconnected
+    if (!m_userDisconnected) {
+        scheduleReconnect();
+    }
     
     // Stop watching if any
     if (!m_watchedClientId.isEmpty()) {
@@ -1114,14 +1180,22 @@ void MainWindow::onScreensInfoReceived(const ClientInfo& clientInfo) {
     if (!clientInfo.getId().isEmpty() && clientInfo.getId() == m_selectedClient.getId()) {
         qDebug() << "Updating canvas with fresh screens for" << clientInfo.getMachineName();
         m_selectedClient = clientInfo; // keep selected client in sync
+        
+        // Hide loading indicator and show canvas and volume with fresh data
+        if (m_loadingIndicator) m_loadingIndicator->hide();
         if (m_screenCanvas) {
             m_screenCanvas->setScreens(clientInfo.getScreens());
+            m_screenCanvas->show();
             m_screenCanvas->recenterWithMargin(33);
+            m_screenCanvas->setFocus(Qt::OtherFocusReason);
         }
+        if (m_volumeIndicator) {
+            m_volumeIndicator->show();
+            updateVolumeIndicator(); // Update with fresh data
+        }
+        
         // Optional: refresh UI labels if platform/machine changed
         m_clientNameLabel->setText(QString("%1 (%2)").arg(clientInfo.getMachineName()).arg(clientInfo.getPlatform()));
-    // Refresh volume UI based on latest info
-    updateVolumeIndicator();
     }
 }
 
