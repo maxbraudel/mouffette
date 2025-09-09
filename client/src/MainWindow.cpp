@@ -32,6 +32,7 @@
 #include <QPixmap>
 #include <QGraphicsTextItem>
 #include <QGraphicsRectItem>
+#include <QGraphicsPathItem>
 #include <QFileInfo>
 #include <QGraphicsItem>
 #include <QSet>
@@ -508,6 +509,42 @@ public:
     QObject::connect(m_sink, &QVideoSink::videoFrameChanged, [this](const QVideoFrame& f){ m_lastFrame = f; this->update(); });
     QObject::connect(m_player, &QMediaPlayer::durationChanged, [this](qint64 d){ m_durationMs = d; this->update(); });
     QObject::connect(m_player, &QMediaPlayer::positionChanged, [this](qint64 p){ m_positionMs = p; this->update(); });
+
+    // Controls overlays (ignore transforms so they stay in absolute pixels)
+    m_controlsBg = new QGraphicsRectItem(this);
+    m_controlsBg->setPen(Qt::NoPen);
+    m_controlsBg->setBrush(QColor(0,0,0,160));
+    m_controlsBg->setZValue(100.0);
+    m_controlsBg->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+    m_controlsBg->setAcceptedMouseButtons(Qt::NoButton);
+
+    m_playBtnRectItem = new QGraphicsRectItem(m_controlsBg);
+    m_playBtnRectItem->setPen(Qt::NoPen);
+    m_playBtnRectItem->setBrush(QColor(0,0,0,160));
+    m_playBtnRectItem->setZValue(101.0);
+    m_playBtnRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+    m_playBtnRectItem->setAcceptedMouseButtons(Qt::NoButton);
+
+    m_playIcon = new QGraphicsPathItem(m_playBtnRectItem);
+    m_playIcon->setBrush(Qt::white);
+    m_playIcon->setPen(Qt::NoPen);
+    m_playIcon->setZValue(102.0);
+    m_playIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+    m_playIcon->setAcceptedMouseButtons(Qt::NoButton);
+
+    m_progressBgRectItem = new QGraphicsRectItem(m_controlsBg);
+    m_progressBgRectItem->setPen(Qt::NoPen);
+    m_progressBgRectItem->setBrush(QColor(0,0,0,160));
+    m_progressBgRectItem->setZValue(101.0);
+    m_progressBgRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+    m_progressBgRectItem->setAcceptedMouseButtons(Qt::NoButton);
+
+    m_progressFillRectItem = new QGraphicsRectItem(m_progressBgRectItem);
+    m_progressFillRectItem->setPen(Qt::NoPen);
+    m_progressFillRectItem->setBrush(QColor(74,144,226));
+    m_progressFillRectItem->setZValue(102.0);
+    m_progressFillRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+    m_progressFillRectItem->setAcceptedMouseButtons(Qt::NoButton);
     }
     ~ResizableVideoItem() override {
     if (m_player) QObject::disconnect(m_player, nullptr, nullptr, nullptr);
@@ -523,6 +560,18 @@ public:
         r = std::clamp<qreal>(r, 0.0, 1.0);
         m_player->setPosition(static_cast<qint64>(r * m_durationMs));
     }
+    // Expose a helper for view-level control handling
+    bool handleControlsPressAtItemPos(const QPointF& itemPos) {
+        // Play button
+        if (m_playBtnRectItemCoords.contains(itemPos)) { togglePlayPause(); return true; }
+        // Progress bar
+        if (m_progRectItemCoords.contains(itemPos)) {
+            qreal r = (itemPos.x() - m_progRectItemCoords.left()) / m_progRectItemCoords.width();
+            seekToRatio(r);
+            return true;
+        }
+        return false;
+    }
     void paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget* widget) override {
         Q_UNUSED(option); Q_UNUSED(widget);
         // Draw current frame (or placeholder)
@@ -533,58 +582,17 @@ public:
         } else {
             painter->fillRect(br, Qt::black);
         }
-        // Controls area beneath content with absolute height matching label height
-        const int padXpx = 8, padYpx = 4; // same as label
-        const int controlHpx = (m_labelText ? static_cast<int>(m_labelText->boundingRect().height()) + 2*padYpx : 24);
-        // Convert control height to item units
-        const qreal controlHItem = toItemLengthFromPixels(controlHpx);
-        QRectF ctrlRect(0, br.height(), br.width(), controlHItem);
-        painter->fillRect(ctrlRect, QColor(0,0,0,160));
-        // Play/Pause button: square with side = controlHItem
-        QRectF playBtnRect(ctrlRect.left(), ctrlRect.top(), controlHItem, controlHItem);
-        painter->setPen(Qt::NoPen);
-        painter->setBrush(QColor(0,0,0,160));
-        painter->drawRect(playBtnRect);
-        // Icon
-        painter->setBrush(Qt::white);
-        painter->setPen(Qt::NoPen);
-        if (m_player && m_player->playbackState() == QMediaPlayer::PlayingState) {
-            // Pause icon (two bars)
-            qreal w = playBtnRect.width(); qreal h = playBtnRect.height();
-            qreal barW = w * 0.25; qreal gap = w * 0.15;
-            QRectF leftBar(playBtnRect.left() + w*0.2, playBtnRect.top() + h*0.2, barW, h*0.6);
-            QRectF rightBar(leftBar.adjusted(barW + gap, 0, barW + gap, 0));
-            painter->drawRect(leftBar);
-            painter->drawRect(rightBar);
-        } else {
-            // Play icon (triangle)
-            QPolygonF tri;
-            tri << QPointF(playBtnRect.left() + playBtnRect.width()*0.35, playBtnRect.top() + playBtnRect.height()*0.2)
-                << QPointF(playBtnRect.left() + playBtnRect.width()*0.35, playBtnRect.bottom() - playBtnRect.height()*0.2)
-                << QPointF(playBtnRect.right() - playBtnRect.width()*0.25, playBtnRect.center().y());
-            painter->drawPolygon(tri);
-        }
-        // Progress bar: fills rest of width
-        QRectF progRect(playBtnRect.right(), ctrlRect.top(), ctrlRect.width() - playBtnRect.width(), controlHItem);
-        painter->setBrush(QColor(0,0,0,160));
-        painter->setPen(Qt::NoPen);
-        painter->drawRect(progRect);
-        // Fill according to position
-        qreal ratio = (m_durationMs > 0) ? (static_cast<qreal>(m_positionMs) / m_durationMs) : 0.0;
-        ratio = std::clamp<qreal>(ratio, 0.0, 1.0);
-        QRectF fillRect = progRect.adjusted(2, 2, -2, -2);
-        fillRect.setWidth(fillRect.width() * ratio);
-        painter->setBrush(QColor(74,144,226));
-        painter->drawRect(fillRect);
+        // Update floating controls overlay
+        updateControlsLayout();
         // Selection/handles and label
         paintSelectionAndLabel(painter);
     }
     QRectF boundingRect() const override {
         QRectF br(0,0, baseWidth(), baseHeight());
-        // add controls height in item units
+        // add controls height in item units (for event hit testing)
         int padYpx = 4;
         int controlHpx = (m_labelText ? static_cast<int>(m_labelText->boundingRect().height()) + 2*padYpx : 24);
-        qreal extra = toItemLengthFromPixels(controlHpx);
+        qreal extra = toItemLengthFromPixels(controlHpx + 8); // include small gap
         br.setHeight(br.height() + extra);
         if (isSelected()) {
             qreal pad = toItemLengthFromPixels(m_selectionSize) / 2.0;
@@ -594,10 +602,9 @@ public:
     }
     QPainterPath shape() const override {
         QPainterPath p; p.addRect(QRectF(0,0, baseWidth(), baseHeight()));
-        // controls clickable area
-        int padYpx = 4; int controlHpx = (m_labelText ? static_cast<int>(m_labelText->boundingRect().height()) + 2*padYpx : 24);
-        qreal extra = toItemLengthFromPixels(controlHpx);
-        p.addRect(QRectF(0, baseHeight(), baseWidth(), extra));
+        // controls clickable areas (use last computed item-space rects)
+        if (!m_playBtnRectItemCoords.isNull()) p.addRect(m_playBtnRectItemCoords);
+        if (!m_progRectItemCoords.isNull()) p.addRect(m_progRectItemCoords);
         if (isSelected()) {
             const qreal s = toItemLengthFromPixels(m_selectionSize);
             QRectF br(0,0, baseWidth(), baseHeight());
@@ -620,19 +627,14 @@ public:
             event->accept();
             return;
         }
-        // Controls interactions
-        const int padYpx = 4;
-        const int controlHpx = (m_labelText ? static_cast<int>(m_labelText->boundingRect().height()) + 2*padYpx : 24);
-        const qreal controlHItem = toItemLengthFromPixels(controlHpx);
-        QRectF playBtnRect(0, baseHeight(), controlHItem, controlHItem);
-        QRectF progRect(playBtnRect.right(), baseHeight(), baseWidth() - playBtnRect.width(), controlHItem);
-        if (playBtnRect.contains(event->pos())) {
+        // Controls interactions using last computed rects
+        if (m_playBtnRectItemCoords.contains(event->pos())) {
             togglePlayPause();
             event->accept();
             return;
         }
-        if (progRect.contains(event->pos())) {
-            qreal r = (event->pos().x() - progRect.left()) / progRect.width();
+        if (m_progRectItemCoords.contains(event->pos())) {
+            qreal r = (event->pos().x() - m_progRectItemCoords.left()) / m_progRectItemCoords.width();
             seekToRatio(r);
             event->accept();
             return;
@@ -640,6 +642,76 @@ public:
         ResizableMediaBase::mousePressEvent(event);
     }
 private:
+    void updateControlsLayout() {
+        if (!scene() || scene()->views().isEmpty()) return;
+        QGraphicsView* v = scene()->views().first();
+        // Heights based on filename label height
+        const int padYpx = 4;
+        const int gapPx = 8;
+        const int controlHpx = (m_labelText ? static_cast<int>(m_labelText->boundingRect().height()) + 2*padYpx : 24);
+        const int totalWpx = 260; // absolute width for controls overlay
+        const int playWpx = controlHpx; // square
+        const int progWpx = totalWpx - playWpx;
+
+        // Compute bottom-center of video in viewport coords
+        QPointF bottomCenterItem(baseWidth()/2.0, baseHeight());
+        QPointF bottomCenterScene = mapToScene(bottomCenterItem);
+        QPointF bottomCenterView = v->mapFromScene(bottomCenterScene);
+        // Desired top-left of controls in viewport (pixels)
+        QPointF ctrlTopLeftView = bottomCenterView + QPointF(-totalWpx/2.0, gapPx);
+        // Map back to item coordinates and set positions
+        QPointF ctrlTopLeftScene = v->mapToScene(ctrlTopLeftView.toPoint());
+        QPointF ctrlTopLeftItem = mapFromScene(ctrlTopLeftScene);
+        if (m_controlsBg) {
+            m_controlsBg->setRect(0, 0, totalWpx, controlHpx);
+            m_controlsBg->setPos(ctrlTopLeftItem);
+        }
+        if (m_playBtnRectItem) {
+            m_playBtnRectItem->setRect(0, 0, playWpx, controlHpx);
+            m_playBtnRectItem->setPos(0, 0); // relative to controlsBg
+        }
+        if (m_progressBgRectItem) {
+            m_progressBgRectItem->setRect(0, 0, progWpx, controlHpx);
+            m_progressBgRectItem->setPos(playWpx, 0); // to the right of play button
+        }
+        if (m_progressFillRectItem) {
+            qreal ratio = (m_durationMs > 0) ? (static_cast<qreal>(m_positionMs) / m_durationMs) : 0.0;
+            ratio = std::clamp<qreal>(ratio, 0.0, 1.0);
+            const qreal margin = 2.0;
+            m_progressFillRectItem->setRect(margin, margin, (progWpx - 2*margin) * ratio, controlHpx - 2*margin);
+        }
+        // Update play icon shape
+    if (m_playIcon) {
+            if (m_player && m_player->playbackState() == QMediaPlayer::PlayingState) {
+                // Pause icon: two bars
+                qreal w = playWpx;
+                qreal h = controlHpx;
+                qreal barW = w * 0.25; qreal gap = w * 0.15;
+                QRectF leftBar(w*0.2, h*0.2, barW, h*0.6);
+                QRectF rightBar(leftBar.adjusted(barW + gap, 0, barW + gap, 0));
+                QPainterPath path;
+                path.addRect(leftBar);
+                path.addRect(rightBar);
+                m_playIcon->setPath(path);
+            } else {
+                // Play icon: triangle
+        QPolygonF poly;
+        poly << QPointF(playWpx*0.35, controlHpx*0.2)
+             << QPointF(playWpx*0.35, controlHpx*0.8)
+             << QPointF(playWpx*0.75, controlHpx*0.5);
+        QPainterPath path; path.addPolygon(poly); path.closeSubpath();
+                m_playIcon->setPath(path);
+            }
+        }
+        // Store item-space rects for hit testing on the parent
+        // Map viewport-space rectangles back to item coords
+        QRectF playView(ctrlTopLeftView, QSizeF(playWpx, controlHpx));
+        QRectF progView(ctrlTopLeftView + QPointF(playWpx, 0), QSizeF(progWpx, controlHpx));
+        QRectF playScene(v->mapToScene(playView.toRect()).boundingRect());
+        QRectF progScene(v->mapToScene(progView.toRect()).boundingRect());
+        m_playBtnRectItemCoords = mapFromScene(playScene).boundingRect();
+        m_progRectItemCoords = mapFromScene(progScene).boundingRect();
+    }
     qreal baseWidth() const { return static_cast<qreal>(m_baseSize.width()); }
     qreal baseHeight() const { return static_cast<qreal>(m_baseSize.height()); }
     QMediaPlayer* m_player = nullptr;
@@ -648,6 +720,15 @@ private:
     QVideoFrame m_lastFrame;
     qint64 m_durationMs = 0;
     qint64 m_positionMs = 0;
+    // Floating controls (absolute px)
+    QGraphicsRectItem* m_controlsBg = nullptr;
+    QGraphicsRectItem* m_playBtnRectItem = nullptr;
+    QGraphicsPathItem* m_playIcon = nullptr; // path supports both triangle and bars
+    QGraphicsRectItem* m_progressBgRectItem = nullptr;
+    QGraphicsRectItem* m_progressFillRectItem = nullptr;
+    // Cached item-space rects for hit-testing
+    QRectF m_playBtnRectItemCoords;
+    QRectF m_progRectItemCoords;
 };
 
 MainWindow::MainWindow(QWidget *parent)
@@ -1383,13 +1464,44 @@ void ScreenCanvas::mousePressEvent(QMouseEvent* event) {
                 return;
             }
         }
-        // Decide based on item type under cursor: media -> scene, screens/empty -> pan
+        // Decide based on item type under cursor: media (or its overlays) -> scene, screens/empty -> pan
         const QList<QGraphicsItem*> hitItems = items(event->pos());
-        bool hitMedia = false;
-        for (QGraphicsItem* it : hitItems) {
-            if (dynamic_cast<ResizableMediaBase*>(it)) { hitMedia = true; break; }
+        auto toMedia = [](QGraphicsItem* x)->ResizableMediaBase* {
+            while (x) { if (auto* m = dynamic_cast<ResizableMediaBase*>(x)) return m; x = x->parentItem(); }
+            return nullptr;
+        };
+        ResizableMediaBase* mediaHit = nullptr;
+        QGraphicsItem* rawHit = nullptr;
+        for (QGraphicsItem* it : hitItems) { if ((mediaHit = toMedia(it))) { rawHit = it; break; } }
+        if (mediaHit) {
+            // If a media (or its overlay) is hit, ensure it remains selected and allow direct control interactions
+            if (!mediaHit->isSelected()) {
+                mediaHit->setSelected(true);
+            }
+            // Map click to item pos and let video handle controls
+            if (auto* v = dynamic_cast<ResizableVideoItem*>(mediaHit)) {
+                const QPointF itemPos = v->mapFromScene(mapToScene(event->pos()));
+                if (v->handleControlsPressAtItemPos(itemPos)) {
+                    event->accept();
+                    return;
+                }
+            }
+            // Otherwise, let default behavior run (move/select media), but do not clear selection
+            QGraphicsView::mousePressEvent(event);
+            return;
         }
-        if (hitMedia) { QGraphicsView::mousePressEvent(event); return; }
+
+        // No item hit: allow interacting with controls of currently selected video items
+        // This covers the case where the floating controls are positioned outside the item's hittable area
+        for (QGraphicsItem* it : scene()->selectedItems()) {
+            if (auto* v = dynamic_cast<ResizableVideoItem*>(it)) {
+                const QPointF itemPos = v->mapFromScene(mapToScene(event->pos()));
+                if (v->handleControlsPressAtItemPos(itemPos)) {
+                    event->accept();
+                    return;
+                }
+            }
+        }
         // Otherwise start panning the view
         if (m_scene) {
             m_scene->clearSelection(); // single-click on empty space deselects items
@@ -1439,10 +1551,12 @@ void ScreenCanvas::mouseMoveEvent(QMouseEvent* event) {
     // Handle dragging and panning logic
     if (event->buttons() & Qt::LeftButton) {
         const QList<QGraphicsItem*> hitItems = items(event->pos());
+        auto toMedia = [](QGraphicsItem* x)->ResizableMediaBase* {
+            while (x) { if (auto* m = dynamic_cast<ResizableMediaBase*>(x)) return m; x = x->parentItem(); }
+            return nullptr;
+        };
         bool hitMedia = false;
-        for (QGraphicsItem* it : hitItems) {
-            if (dynamic_cast<ResizableMediaBase*>(it)) { hitMedia = true; break; }
-        }
+        for (QGraphicsItem* it : hitItems) { if (toMedia(it)) { hitMedia = true; break; } }
         if (hitMedia) { QGraphicsView::mouseMoveEvent(event); return; }
     }
     if (m_panning) {
