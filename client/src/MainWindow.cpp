@@ -170,9 +170,10 @@ public:
         setZValue(1.0);
         // Filename label setup (zoom-independent via ItemIgnoresTransformations)
         m_filename = filename;
-        m_labelBg = new QGraphicsRectItem(this);
-        m_labelBg->setPen(Qt::NoPen);
-        m_labelBg->setBrush(QColor(0,0,0,160));
+    m_labelBg = new QGraphicsRectItem(this);
+    m_labelBg->setPen(Qt::NoPen);
+    // Unified translucent dark background used by label and video controls
+    m_labelBg->setBrush(QColor(0, 0, 0, 160));
         m_labelBg->setZValue(100.0);
         m_labelBg->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
         m_labelBg->setAcceptedMouseButtons(Qt::NoButton);
@@ -513,14 +514,16 @@ public:
     // Controls overlays (ignore transforms so they stay in absolute pixels)
     m_controlsBg = new QGraphicsRectItem(this);
     m_controlsBg->setPen(Qt::NoPen);
-    m_controlsBg->setBrush(QColor(0,0,0,160));
+    // Use the same background brush as the filename label to ensure identical color/opacity
+    m_controlsBg->setBrush(m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
     m_controlsBg->setZValue(100.0);
     m_controlsBg->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_controlsBg->setAcceptedMouseButtons(Qt::NoButton);
 
     m_playBtnRectItem = new QGraphicsRectItem(m_controlsBg);
     m_playBtnRectItem->setPen(Qt::NoPen);
-    m_playBtnRectItem->setBrush(QColor(0,0,0,160));
+    // Avoid double-darkening: the parent controls background provides the backdrop
+    m_playBtnRectItem->setBrush(Qt::NoBrush);
     m_playBtnRectItem->setZValue(101.0);
     m_playBtnRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_playBtnRectItem->setAcceptedMouseButtons(Qt::NoButton);
@@ -534,13 +537,15 @@ public:
 
     m_progressBgRectItem = new QGraphicsRectItem(m_controlsBg);
     m_progressBgRectItem->setPen(Qt::NoPen);
-    m_progressBgRectItem->setBrush(QColor(0,0,0,160));
+    // Avoid double-darkening: rely on the parent controls background
+    m_progressBgRectItem->setBrush(Qt::NoBrush);
     m_progressBgRectItem->setZValue(101.0);
     m_progressBgRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_progressBgRectItem->setAcceptedMouseButtons(Qt::NoButton);
 
     m_progressFillRectItem = new QGraphicsRectItem(m_progressBgRectItem);
     m_progressFillRectItem->setPen(Qt::NoPen);
+    // Progress fill uses the primary accent color; keep solid for readability over translucent bg
     m_progressFillRectItem->setBrush(QColor(74,144,226));
     m_progressFillRectItem->setZValue(102.0);
     m_progressFillRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
