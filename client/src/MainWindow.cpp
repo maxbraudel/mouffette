@@ -696,7 +696,7 @@ void MainWindow::createClientListPage() {
     
     // Client list section
     m_clientListLabel = new QLabel("Connected Clients:");
-    m_clientListLabel->setStyleSheet("QLabel { font-size: 14px; font-weight: bold; }");
+    m_clientListLabel->setStyleSheet("QLabel { font-size: 16px; font-weight: bold; }");
     layout->addWidget(m_clientListLabel);
     
     m_clientListWidget = new QListWidget();
@@ -751,29 +751,36 @@ void MainWindow::createScreenViewPage() {
     m_screenViewLayout->setSpacing(15);
     m_screenViewLayout->setContentsMargins(0, 0, 0, 0);
     
-    // Header row: hostname on the left, indicators on the right
+    // Header row: hostname on the left, indicators on the right (replaces "Connected Clients:" title)
     QHBoxLayout* headerLayout = new QHBoxLayout();
 
     m_clientNameLabel = new QLabel();
-    m_clientNameLabel->setStyleSheet("QLabel { font-size: 16px; font-weight: bold; }");
-    m_clientNameLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    m_clientNameLabel->setStyleSheet("QLabel { font-size: 16px; font-weight: bold; color: palette(text); }");
+    m_clientNameLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
 
     m_volumeIndicator = new QLabel("🔈 Volume: --");
-    // Use palette(window-text) so it remains readable in light/dark modes
-    m_volumeIndicator->setStyleSheet("QLabel { font-size: 14px; color: palette(window-text); padding: 5px; }");
+    m_volumeIndicator->setStyleSheet("QLabel { font-size: 16px; color: palette(text); font-weight: bold; }");
     m_volumeIndicator->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    m_volumeIndicator->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    m_volumeIndicator->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
 
     headerLayout->addWidget(m_clientNameLabel, 0, Qt::AlignLeft);
     headerLayout->addStretch();
     headerLayout->addWidget(m_volumeIndicator, 0, Qt::AlignRight);
+    headerLayout->setContentsMargins(0, 0, 0, 0);
 
     m_screenViewLayout->addLayout(headerLayout);
     
-    // Screen canvas
+    // Canvas container with styling to match client list widget
     m_screenCanvas = new ScreenCanvas();
     m_screenCanvas->setMinimumHeight(400);
     m_screenCanvas->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    m_screenCanvas->setStyleSheet(
+        "ScreenCanvas { "
+        "   border: 1px solid palette(mid); "
+        "   border-radius: 5px; "
+        "   background-color: palette(base); "
+        "}"
+    );
     connect(m_screenCanvas, &ScreenCanvas::screenClicked, this, &MainWindow::onScreenClicked);
     // Ensure focus is on canvas, and block stray key events
     m_screenViewWidget->installEventFilter(this);
