@@ -262,7 +262,7 @@ ScreenCanvas::ScreenCanvas(QWidget* parent)
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     setBackgroundBrush(QBrush(QColor(45, 45, 45)));
     setRenderHint(QPainter::Antialiasing);
-    // We'll implement zoom-under-cursor ourselves using scrollbars
+    // Use manual anchoring logic for consistent behavior across platforms
     setTransformationAnchor(QGraphicsView::NoAnchor);
     // When the view is resized, keep the view-centered anchor (we also recenter explicitly on window resize)
     setResizeAnchor(QGraphicsView::AnchorViewCenter);
@@ -270,9 +270,18 @@ ScreenCanvas::ScreenCanvas(QWidget* parent)
     // Enable mouse tracking for panning
     setMouseTracking(true);
     m_lastMousePos = QPoint(0, 0);
+    // Pinch guard timer prevents two-finger scroll handling during active pinch
+    m_nativePinchGuardTimer = new QTimer(this);
+    m_nativePinchGuardTimer->setSingleShot(true);
+    m_nativePinchGuardTimer->setInterval(60); // short grace period after last pinch delta
+    connect(m_nativePinchGuardTimer, &QTimer::timeout, this, [this]() {
+        m_nativePinchActive = false;
+    });
     
-    // Enable pinch gesture
+    // Enable pinch gesture (except on macOS where we'll rely on NativeGesture to avoid double handling)
+#ifndef Q_OS_MACOS
     grabGesture(Qt::PinchGesture);
+#endif
 }
 
 void ScreenCanvas::setScreens(const QList<ScreenInfo>& screens) {
@@ -459,16 +468,32 @@ void ScreenCanvas::keyPressEvent(QKeyEvent* event) {
 
 bool ScreenCanvas::event(QEvent* event) {
     if (event->type() == QEvent::Gesture) {
+#ifdef Q_OS_MACOS
+        // On macOS, rely on QNativeGestureEvent for trackpad pinch to avoid duplicate scaling
+        return false;
+#else
         return gestureEvent(static_cast<QGestureEvent*>(event));
+#endif
     }
     // Handle native gestures (e.g., macOS trackpad pinch zoom)
     if (event->type() == QEvent::NativeGesture) {
         auto* ng = static_cast<QNativeGestureEvent*>(event);
         if (ng->gestureType() == Qt::ZoomNativeGesture) {
+            // Mark pinch as active and extend guard
+            m_nativePinchActive = true;
+            m_nativePinchGuardTimer->start();
             // ng->value() is a delta; use exponential to convert to multiplicative factor
             const qreal factor = std::pow(2.0, ng->value());
-            // Anchor at the last known mouse cursor position (or center if unknown)
-            QPoint vpPos = m_lastMousePos.isNull() ? viewport()->rect().center() : m_lastMousePos;
+            // Anchor at the gesture's actual position (ng->position is in view coords)
+            QPoint viewPos = ng->position().toPoint();
+            QPoint vpPos = viewport()->mapFrom(this, viewPos);
+            if (!viewport()->rect().contains(vpPos)) {
+                // Fallbacks: cursor position, then last mouse position, then center
+                vpPos = viewport()->mapFromGlobal(QCursor::pos());
+                if (!viewport()->rect().contains(vpPos)) {
+                    vpPos = m_lastMousePos.isNull() ? viewport()->rect().center() : m_lastMousePos;
+                }
+            }
             zoomAroundViewportPos(vpPos, factor);
             event->accept();
             return true;
@@ -478,6 +503,10 @@ bool ScreenCanvas::event(QEvent* event) {
 }
 
 bool ScreenCanvas::gestureEvent(QGestureEvent* event) {
+#ifdef Q_OS_MACOS
+    Q_UNUSED(event);
+    return false; // handled via NativeGesture on macOS
+#endif
     if (QGesture* pinch = event->gesture(Qt::PinchGesture)) {
         QPinchGesture* pinchGesture = static_cast<QPinchGesture*>(pinch);
         
@@ -537,6 +566,13 @@ void ScreenCanvas::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void ScreenCanvas::wheelEvent(QWheelEvent* event) {
+    // On macOS during an active pinch, ignore wheel-based two-finger scroll to avoid jitter
+#ifdef Q_OS_MACOS
+    if (m_nativePinchActive) {
+        event->ignore();
+        return;
+    }
+#endif
     // If Cmd (macOS) or Ctrl (others) is held, treat the wheel as zoom, anchored under cursor
 #ifdef Q_OS_MACOS
     const bool zoomModifier = event->modifiers().testFlag(Qt::MetaModifier);

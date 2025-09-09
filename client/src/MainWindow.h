@@ -64,6 +64,9 @@ private:
     bool m_panning;
     QPoint m_lastPanPoint;
     QPoint m_lastMousePos;
+    // macOS: track native pinch session to avoid handling two-finger scroll simultaneously
+    bool m_nativePinchActive = false;
+    QTimer* m_nativePinchGuardTimer = nullptr;
     
     void createScreenItems();
     QGraphicsRectItem* createScreenItem(const ScreenInfo& screen, int index, const QRectF& position);
