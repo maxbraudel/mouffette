@@ -13,7 +13,7 @@ if(APPLE)
 endif()
 
 # Find Qt6
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network WebSockets)
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network WebSockets Multimedia)
 
 # Enable Qt MOC
 set(CMAKE_AUTOMOC ON)
@@ -63,6 +63,7 @@ target_link_libraries(MouffetteClient
     Qt6::Widgets 
     Qt6::Network 
     Qt6::WebSockets
+    Qt6::Multimedia
 )
 
 # Include directories

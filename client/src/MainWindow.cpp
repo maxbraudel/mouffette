@@ -33,6 +33,12 @@
 #include <QGraphicsTextItem>
 #include <QGraphicsRectItem>
 #include <QFileInfo>
+#include <QGraphicsItem>
+#include <QSet>
+#include <QMediaPlayer>
+#include <QAudioOutput>
+#include <QVideoSink>
+#include <QVideoFrame>
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -150,16 +156,15 @@ private:
 };
 
 // Resizable, movable pixmap item with corner handles; keeps aspect ratio
-class ResizablePixmapItem : public QGraphicsPixmapItem {
+class ResizableMediaBase : public QGraphicsItem {
 public:
-    explicit ResizablePixmapItem(const QPixmap& pm, int visualSizePx, int selectionSizePx, const QString& filename = QString())
-        : QGraphicsPixmapItem(pm)
+    explicit ResizableMediaBase(const QSize& baseSizePx, int visualSizePx, int selectionSizePx, const QString& filename = QString())
     {
         m_visualSize = qMax(4, visualSizePx);
         m_selectionSize = qMax(m_visualSize, selectionSizePx);
         setFlags(QGraphicsItem::ItemIsMovable | QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemSendsGeometryChanges);
     setAcceptHoverEvents(true);
-        m_baseSize = pm.size();
+        m_baseSize = baseSizePx;
         setScale(1.0);
         setZValue(1.0);
         // Filename label setup (zoom-independent via ItemIgnoresTransformations)
@@ -261,50 +266,40 @@ public:
     }
 
 protected:
-    void paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget* widget) override {
-        Q_UNUSED(option);
-        Q_UNUSED(widget);
-    // Keep the filename label positioned each paint (handles zoom/transform changes)
-    updateLabelLayout();
-        // Draw the pixmap ourselves to avoid default selection border around boundingRect
-        if (!pixmap().isNull()) {
-            painter->drawPixmap(QPointF(0, 0), pixmap());
-        }
-        // Draw selection border and handles ONLY when selected
-        if (isSelected()) {
-            QRectF br(0, 0, m_baseSize.width(), m_baseSize.height());
-            painter->save();
-            painter->setBrush(Qt::NoBrush);
-            // Striped effect: alternate white and blue dashes
-            QPen whitePen(QColor(255,255,255));
-            whitePen.setCosmetic(true);
-            whitePen.setWidth(1);
-            whitePen.setStyle(Qt::DashLine);
-            whitePen.setDashPattern(QVector<qreal>({4, 4}));
-            whitePen.setCapStyle(Qt::FlatCap);
-            whitePen.setJoinStyle(Qt::MiterJoin);
-            painter->setPen(whitePen);
-            painter->drawRect(br);
-            QPen bluePen(QColor(74,144,226));
-            bluePen.setCosmetic(true);
-            bluePen.setWidth(1);
-            bluePen.setStyle(Qt::DashLine);
-            bluePen.setDashPattern(QVector<qreal>({4, 4}));
-            bluePen.setDashOffset(4); // shift to interleave with white
-            bluePen.setCapStyle(Qt::FlatCap);
-            bluePen.setJoinStyle(Qt::MiterJoin);
-            painter->setPen(bluePen);
-            painter->drawRect(br);
-            painter->restore();
-            // Corner handles (visual squares) - only visible when selected
-            const qreal s = toItemLengthFromPixels(m_visualSize);
-            painter->setPen(QPen(QColor(74,144,226), 0));
-            painter->setBrush(QBrush(Qt::white));
-            painter->drawRect(QRectF(br.topLeft() - QPointF(s/2,s/2), QSizeF(s,s)));
-            painter->drawRect(QRectF(QPointF(br.right(), br.top()) - QPointF(s/2,s/2), QSizeF(s,s)));
-            painter->drawRect(QRectF(QPointF(br.left(), br.bottom()) - QPointF(s/2,s/2), QSizeF(s,s)));
-            painter->drawRect(QRectF(br.bottomRight() - QPointF(s/2,s/2), QSizeF(s,s)));
-        }
+    // Draw selection chrome and keep label positioned
+    void paintSelectionAndLabel(QPainter* painter) {
+        updateLabelLayout();
+        if (!isSelected()) return;
+        QRectF br(0, 0, m_baseSize.width(), m_baseSize.height());
+        painter->save();
+        painter->setBrush(Qt::NoBrush);
+        QPen whitePen(QColor(255,255,255));
+        whitePen.setCosmetic(true);
+        whitePen.setWidth(1);
+        whitePen.setStyle(Qt::DashLine);
+        whitePen.setDashPattern(QVector<qreal>({4, 4}));
+        whitePen.setCapStyle(Qt::FlatCap);
+        whitePen.setJoinStyle(Qt::MiterJoin);
+        painter->setPen(whitePen);
+        painter->drawRect(br);
+        QPen bluePen(QColor(74,144,226));
+        bluePen.setCosmetic(true);
+        bluePen.setWidth(1);
+        bluePen.setStyle(Qt::DashLine);
+        bluePen.setDashPattern(QVector<qreal>({4, 4}));
+        bluePen.setDashOffset(4);
+        bluePen.setCapStyle(Qt::FlatCap);
+        bluePen.setJoinStyle(Qt::MiterJoin);
+        painter->setPen(bluePen);
+        painter->drawRect(br);
+        painter->restore();
+        const qreal s = toItemLengthFromPixels(m_visualSize);
+        painter->setPen(QPen(QColor(74,144,226), 0));
+        painter->setBrush(QBrush(Qt::white));
+        painter->drawRect(QRectF(br.topLeft() - QPointF(s/2,s/2), QSizeF(s,s)));
+        painter->drawRect(QRectF(QPointF(br.right(), br.top()) - QPointF(s/2,s/2), QSizeF(s,s)));
+        painter->drawRect(QRectF(QPointF(br.left(), br.bottom()) - QPointF(s/2,s/2), QSizeF(s,s)));
+        painter->drawRect(QRectF(br.bottomRight() - QPointF(s/2,s/2), QSizeF(s,s)));
     }
 
     QVariant itemChange(GraphicsItemChange change, const QVariant &value) override {
@@ -323,7 +318,7 @@ protected:
             // Keep label properly positioned after selection changes
             updateLabelLayout();
         }
-        return QGraphicsPixmapItem::itemChange(change, value);
+    return QGraphicsItem::itemChange(change, value);
     }
 
     void mousePressEvent(QGraphicsSceneMouseEvent* event) override {
@@ -339,7 +334,7 @@ protected:
             event->accept();
             return;
         }
-        QGraphicsPixmapItem::mousePressEvent(event);
+    QGraphicsItem::mousePressEvent(event);
     }
 
     void mouseMoveEvent(QGraphicsSceneMouseEvent* event) override {
@@ -354,7 +349,7 @@ protected:
             return;
         }
         // Do not manage cursor here - let the view handle it globally
-        QGraphicsPixmapItem::mouseMoveEvent(event);
+    QGraphicsItem::mouseMoveEvent(event);
     }
 
     void mouseReleaseEvent(QGraphicsSceneMouseEvent* event) override {
@@ -364,20 +359,20 @@ protected:
             event->accept();
             return;
         }
-        QGraphicsPixmapItem::mouseReleaseEvent(event);
+    QGraphicsItem::mouseReleaseEvent(event);
     }
 
     void hoverMoveEvent(QGraphicsSceneHoverEvent* event) override {
         // Do not manage cursor here - let the view handle it globally
-        QGraphicsPixmapItem::hoverMoveEvent(event);
+    QGraphicsItem::hoverMoveEvent(event);
     }
 
     void hoverLeaveEvent(QGraphicsSceneHoverEvent* event) override {
         // Do not manage cursor here - let the view handle it globally
-        QGraphicsPixmapItem::hoverLeaveEvent(event);
+    QGraphicsItem::hoverLeaveEvent(event);
     }
 
-private:
+protected:
     enum Handle { None, TopLeft, TopRight, BottomLeft, BottomRight };
     QSize m_baseSize;
     Handle m_activeHandle = None;
@@ -479,6 +474,180 @@ private:
         QPointF labelTopLeftItem = mapFromScene(labelTopLeftScene);
         m_labelBg->setPos(labelTopLeftItem);
     }
+};
+
+// Image media implementation using the shared base
+class ResizablePixmapItem : public ResizableMediaBase {
+public:
+    explicit ResizablePixmapItem(const QPixmap& pm, int visualSizePx, int selectionSizePx, const QString& filename = QString())
+        : ResizableMediaBase(pm.size(), visualSizePx, selectionSizePx, filename), m_pix(pm)
+    {}
+    void paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget* widget) override {
+        Q_UNUSED(option); Q_UNUSED(widget);
+        if (!m_pix.isNull()) {
+            painter->drawPixmap(QPointF(0,0), m_pix);
+        }
+        paintSelectionAndLabel(painter);
+    }
+private:
+    QPixmap m_pix;
+};
+
+// Video media implementation: renders current frame and overlays controls
+class ResizableVideoItem : public ResizableMediaBase {
+public:
+    explicit ResizableVideoItem(const QString& filePath, int visualSizePx, int selectionSizePx, const QString& filename = QString())
+        : ResizableMediaBase(QSize(640,360), visualSizePx, selectionSizePx, filename)
+    {
+        m_player = new QMediaPlayer();
+        m_audio = new QAudioOutput();
+        m_sink = new QVideoSink();
+    m_player->setAudioOutput(m_audio);
+    m_player->setVideoSink(m_sink);
+    m_player->setSource(QUrl::fromLocalFile(filePath));
+    QObject::connect(m_sink, &QVideoSink::videoFrameChanged, [this](const QVideoFrame& f){ m_lastFrame = f; this->update(); });
+    QObject::connect(m_player, &QMediaPlayer::durationChanged, [this](qint64 d){ m_durationMs = d; this->update(); });
+    QObject::connect(m_player, &QMediaPlayer::positionChanged, [this](qint64 p){ m_positionMs = p; this->update(); });
+    }
+    ~ResizableVideoItem() override {
+    if (m_player) QObject::disconnect(m_player, nullptr, nullptr, nullptr);
+    if (m_sink) QObject::disconnect(m_sink, nullptr, nullptr, nullptr);
+        delete m_player; delete m_audio; delete m_sink;
+    }
+    void togglePlayPause() {
+        if (!m_player) return;
+        if (m_player->playbackState() == QMediaPlayer::PlayingState) m_player->pause(); else m_player->play();
+    }
+    void seekToRatio(qreal r) {
+        if (!m_player || m_durationMs <= 0) return;
+        r = std::clamp<qreal>(r, 0.0, 1.0);
+        m_player->setPosition(static_cast<qint64>(r * m_durationMs));
+    }
+    void paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget* widget) override {
+        Q_UNUSED(option); Q_UNUSED(widget);
+        // Draw current frame (or placeholder)
+        QRectF br(0,0, baseWidth(), baseHeight());
+        if (m_lastFrame.isValid()) {
+            QImage img = m_lastFrame.toImage();
+            if (!img.isNull()) painter->drawImage(br, img);
+        } else {
+            painter->fillRect(br, Qt::black);
+        }
+        // Controls area beneath content with absolute height matching label height
+        const int padXpx = 8, padYpx = 4; // same as label
+        const int controlHpx = (m_labelText ? static_cast<int>(m_labelText->boundingRect().height()) + 2*padYpx : 24);
+        // Convert control height to item units
+        const qreal controlHItem = toItemLengthFromPixels(controlHpx);
+        QRectF ctrlRect(0, br.height(), br.width(), controlHItem);
+        painter->fillRect(ctrlRect, QColor(0,0,0,160));
+        // Play/Pause button: square with side = controlHItem
+        QRectF playBtnRect(ctrlRect.left(), ctrlRect.top(), controlHItem, controlHItem);
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(QColor(0,0,0,160));
+        painter->drawRect(playBtnRect);
+        // Icon
+        painter->setBrush(Qt::white);
+        painter->setPen(Qt::NoPen);
+        if (m_player && m_player->playbackState() == QMediaPlayer::PlayingState) {
+            // Pause icon (two bars)
+            qreal w = playBtnRect.width(); qreal h = playBtnRect.height();
+            qreal barW = w * 0.25; qreal gap = w * 0.15;
+            QRectF leftBar(playBtnRect.left() + w*0.2, playBtnRect.top() + h*0.2, barW, h*0.6);
+            QRectF rightBar(leftBar.adjusted(barW + gap, 0, barW + gap, 0));
+            painter->drawRect(leftBar);
+            painter->drawRect(rightBar);
+        } else {
+            // Play icon (triangle)
+            QPolygonF tri;
+            tri << QPointF(playBtnRect.left() + playBtnRect.width()*0.35, playBtnRect.top() + playBtnRect.height()*0.2)
+                << QPointF(playBtnRect.left() + playBtnRect.width()*0.35, playBtnRect.bottom() - playBtnRect.height()*0.2)
+                << QPointF(playBtnRect.right() - playBtnRect.width()*0.25, playBtnRect.center().y());
+            painter->drawPolygon(tri);
+        }
+        // Progress bar: fills rest of width
+        QRectF progRect(playBtnRect.right(), ctrlRect.top(), ctrlRect.width() - playBtnRect.width(), controlHItem);
+        painter->setBrush(QColor(0,0,0,160));
+        painter->setPen(Qt::NoPen);
+        painter->drawRect(progRect);
+        // Fill according to position
+        qreal ratio = (m_durationMs > 0) ? (static_cast<qreal>(m_positionMs) / m_durationMs) : 0.0;
+        ratio = std::clamp<qreal>(ratio, 0.0, 1.0);
+        QRectF fillRect = progRect.adjusted(2, 2, -2, -2);
+        fillRect.setWidth(fillRect.width() * ratio);
+        painter->setBrush(QColor(74,144,226));
+        painter->drawRect(fillRect);
+        // Selection/handles and label
+        paintSelectionAndLabel(painter);
+    }
+    QRectF boundingRect() const override {
+        QRectF br(0,0, baseWidth(), baseHeight());
+        // add controls height in item units
+        int padYpx = 4;
+        int controlHpx = (m_labelText ? static_cast<int>(m_labelText->boundingRect().height()) + 2*padYpx : 24);
+        qreal extra = toItemLengthFromPixels(controlHpx);
+        br.setHeight(br.height() + extra);
+        if (isSelected()) {
+            qreal pad = toItemLengthFromPixels(m_selectionSize) / 2.0;
+            br = br.adjusted(-pad, -pad, pad, pad);
+        }
+        return br;
+    }
+    QPainterPath shape() const override {
+        QPainterPath p; p.addRect(QRectF(0,0, baseWidth(), baseHeight()));
+        // controls clickable area
+        int padYpx = 4; int controlHpx = (m_labelText ? static_cast<int>(m_labelText->boundingRect().height()) + 2*padYpx : 24);
+        qreal extra = toItemLengthFromPixels(controlHpx);
+        p.addRect(QRectF(0, baseHeight(), baseWidth(), extra));
+        if (isSelected()) {
+            const qreal s = toItemLengthFromPixels(m_selectionSize);
+            QRectF br(0,0, baseWidth(), baseHeight());
+            p.addRect(QRectF(br.topLeft() - QPointF(s/2,s/2), QSizeF(s,s)));
+            p.addRect(QRectF(QPointF(br.right(), br.top()) - QPointF(s/2,s/2), QSizeF(s,s)));
+            p.addRect(QRectF(QPointF(br.left(), br.bottom()) - QPointF(s/2,s/2), QSizeF(s,s)));
+            p.addRect(QRectF(br.bottomRight() - QPointF(s/2,s/2), QSizeF(s,s)));
+        }
+        return p;
+    }
+    void mousePressEvent(QGraphicsSceneMouseEvent* event) override {
+        // Translate to base for resize first
+        m_activeHandle = hitTestHandle(event->pos());
+        if (m_activeHandle != None) {
+            m_fixedItemPoint = handlePoint(opposite(m_activeHandle));
+            m_fixedScenePoint = mapToScene(m_fixedItemPoint);
+            m_initialScale = scale();
+            const qreal d = std::hypot(event->scenePos().x() - m_fixedScenePoint.x(), event->scenePos().y() - m_fixedScenePoint.y());
+            m_initialGrabDist = (d > 1e-6) ? d : 1e-6;
+            event->accept();
+            return;
+        }
+        // Controls interactions
+        const int padYpx = 4;
+        const int controlHpx = (m_labelText ? static_cast<int>(m_labelText->boundingRect().height()) + 2*padYpx : 24);
+        const qreal controlHItem = toItemLengthFromPixels(controlHpx);
+        QRectF playBtnRect(0, baseHeight(), controlHItem, controlHItem);
+        QRectF progRect(playBtnRect.right(), baseHeight(), baseWidth() - playBtnRect.width(), controlHItem);
+        if (playBtnRect.contains(event->pos())) {
+            togglePlayPause();
+            event->accept();
+            return;
+        }
+        if (progRect.contains(event->pos())) {
+            qreal r = (event->pos().x() - progRect.left()) / progRect.width();
+            seekToRatio(r);
+            event->accept();
+            return;
+        }
+        ResizableMediaBase::mousePressEvent(event);
+    }
+private:
+    qreal baseWidth() const { return static_cast<qreal>(m_baseSize.width()); }
+    qreal baseHeight() const { return static_cast<qreal>(m_baseSize.height()); }
+    QMediaPlayer* m_player = nullptr;
+    QAudioOutput* m_audio = nullptr;
+    QVideoSink* m_sink = nullptr;
+    QVideoFrame m_lastFrame;
+    qint64 m_durationMs = 0;
+    qint64 m_positionMs = 0;
 };
 
 MainWindow::MainWindow(QWidget *parent)
@@ -864,6 +1033,8 @@ void ScreenCanvas::setMediaHandleSelectionSizePx(int px) {
     for (QGraphicsItem* it : m_scene->items()) {
         if (auto* rp = dynamic_cast<ResizablePixmapItem*>(it)) {
             rp->setHandleSelectionSize(m_mediaHandleSelectionSizePx);
+        } else if (auto* rv = dynamic_cast<ResizableMediaBase*>(it)) {
+            rv->setHandleSelectionSize(m_mediaHandleSelectionSizePx);
         }
     }
 }
@@ -874,6 +1045,8 @@ void ScreenCanvas::setMediaHandleVisualSizePx(int px) {
     for (QGraphicsItem* it : m_scene->items()) {
         if (auto* rp = dynamic_cast<ResizablePixmapItem*>(it)) {
             rp->setHandleVisualSize(m_mediaHandleVisualSizePx);
+        } else if (auto* rv = dynamic_cast<ResizableMediaBase*>(it)) {
+            rv->setHandleVisualSize(m_mediaHandleVisualSizePx);
         }
     }
 }
@@ -903,6 +1076,7 @@ void ScreenCanvas::dragMoveEvent(QDragMoveEvent* event) {
 void ScreenCanvas::dropEvent(QDropEvent* event) {
     QImage image;
     QString filename;
+    QString droppedPath;
     if (event->mimeData()->hasImage()) {
         image = qvariant_cast<QImage>(event->mimeData()->imageData());
         filename = "pasted-image";
@@ -912,28 +1086,42 @@ void ScreenCanvas::dropEvent(QDropEvent* event) {
             const QUrl& url = urls.first();
             const QString path = url.toLocalFile();
             if (!path.isEmpty()) {
-                image.load(path);
+                droppedPath = path;
                 filename = QFileInfo(path).fileName();
+                image.load(path); // may fail if it's a video
             }
         }
     }
-    if (image.isNull()) {
+    const QPointF scenePos = mapToScene(event->position().toPoint());
+    if (!image.isNull()) {
+        const double w = image.width() * m_scaleFactor;
+        const double h = image.height() * m_scaleFactor;
+        auto* item = new ResizablePixmapItem(QPixmap::fromImage(image), m_mediaHandleVisualSizePx, m_mediaHandleSelectionSizePx, filename);
+        item->setFlags(QGraphicsItem::ItemIsMovable | QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemSendsGeometryChanges);
+        item->setPos(scenePos.x() - w/2.0, scenePos.y() - h/2.0);
+        if (image.width() > 0) item->setScale(w / image.width());
+        m_scene->addItem(item);
+    } else if (!droppedPath.isEmpty()) {
+        // Decide if it's a video by extension
+        const QString ext = QFileInfo(droppedPath).suffix().toLower();
+        static const QSet<QString> kVideoExts = {"mp4","mov","m4v","avi","mkv","webm"};
+        if (kVideoExts.contains(ext)) {
+            // Start with a default logical size; we'll not decode immediately for dimensions
+            auto* vitem = new ResizableVideoItem(droppedPath, m_mediaHandleVisualSizePx, m_mediaHandleSelectionSizePx, filename);
+            // set initial scale based on an assumed 640x360 mapping using scaleFactor
+            const double w = 640.0 * m_scaleFactor;
+            const double s = (640.0 > 0) ? (w / 640.0) : 1.0;
+            vitem->setScale(s);
+            vitem->setPos(scenePos.x() - w/2.0, scenePos.y() - (360.0 * m_scaleFactor)/2.0);
+            m_scene->addItem(vitem);
+        } else {
+            QGraphicsView::dropEvent(event);
+            return;
+        }
+    } else {
         QGraphicsView::dropEvent(event);
         return;
     }
-    // Create pixmap item; scale dimensions from device pixels to scene units using m_scaleFactor
-    const double w = image.width() * m_scaleFactor;
-    const double h = image.height() * m_scaleFactor;
-    QGraphicsPixmapItem* item = new ResizablePixmapItem(QPixmap::fromImage(image), m_mediaHandleVisualSizePx, m_mediaHandleSelectionSizePx, filename);
-    item->setFlags(QGraphicsItem::ItemIsMovable | QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemSendsGeometryChanges);
-    // Position at drop scene position, centering the image
-    const QPointF scenePos = mapToScene(event->position().toPoint());
-    item->setPos(scenePos.x() - w/2.0, scenePos.y() - h/2.0);
-    // Apply scale so the item renders at the intended size in scene coordinates
-    if (image.width() > 0) {
-        item->setScale(w / image.width());
-    }
-    m_scene->addItem(item);
     ensureZOrder();
     event->acceptProposedAction();
 }
@@ -1099,10 +1287,10 @@ void ScreenCanvas::keyPressEvent(QKeyEvent* event) {
         if (m_scene) {
             const QList<QGraphicsItem*> sel = m_scene->selectedItems();
             for (QGraphicsItem* it : sel) {
-                if (auto* rp = dynamic_cast<ResizablePixmapItem*>(it)) {
-                    rp->ungrabMouse();
-                    m_scene->removeItem(rp);
-                    delete rp;
+                if (auto* base = dynamic_cast<ResizableMediaBase*>(it)) {
+                    base->ungrabMouse();
+                    m_scene->removeItem(base);
+                    delete base;
                 }
             }
         }
@@ -1176,10 +1364,10 @@ void ScreenCanvas::mousePressEvent(QMouseEvent* event) {
         // Try to start resize on the topmost media item whose handle contains the point
         // BUT only if the item is already selected
         const QPointF scenePos = mapToScene(event->pos());
-        ResizablePixmapItem* topHandleItem = nullptr;
+        ResizableMediaBase* topHandleItem = nullptr;
         qreal topZ = -std::numeric_limits<qreal>::infinity();
         for (QGraphicsItem* it : m_scene->items()) {
-            if (auto* rp = dynamic_cast<ResizablePixmapItem*>(it)) {
+            if (auto* rp = dynamic_cast<ResizableMediaBase*>(it)) {
                 // Only allow resize if item is selected
                 if (rp->isSelected() && rp->isOnHandleAtItemPos(rp->mapFromScene(scenePos))) {
                     if (rp->zValue() > topZ) { topZ = rp->zValue(); topHandleItem = rp; }
@@ -1199,7 +1387,7 @@ void ScreenCanvas::mousePressEvent(QMouseEvent* event) {
         const QList<QGraphicsItem*> hitItems = items(event->pos());
         bool hitMedia = false;
         for (QGraphicsItem* it : hitItems) {
-            if (dynamic_cast<ResizablePixmapItem*>(it)) { hitMedia = true; break; }
+            if (dynamic_cast<ResizableMediaBase*>(it)) { hitMedia = true; break; }
         }
         if (hitMedia) { QGraphicsView::mousePressEvent(event); return; }
         // Otherwise start panning the view
@@ -1225,10 +1413,10 @@ void ScreenCanvas::mouseMoveEvent(QMouseEvent* event) {
     Qt::CursorShape resizeCursor = Qt::ArrowCursor;
     bool onResizeHandle = false;
     
-    // Check all ResizablePixmapItems for handle hover (prioritize topmost, only if selected)
+    // Check all media items for handle hover (prioritize topmost, only if selected)
     qreal topZ = -std::numeric_limits<qreal>::infinity();
     for (QGraphicsItem* it : m_scene->items()) {
-        if (auto* rp = dynamic_cast<ResizablePixmapItem*>(it)) {
+        if (auto* rp = dynamic_cast<ResizableMediaBase*>(it)) {
             // Only show resize cursor if the item is selected
             if (rp->isSelected() && rp->zValue() >= topZ) {
                 Qt::CursorShape itemCursor = rp->cursorForScenePos(scenePos);
@@ -1253,7 +1441,7 @@ void ScreenCanvas::mouseMoveEvent(QMouseEvent* event) {
         const QList<QGraphicsItem*> hitItems = items(event->pos());
         bool hitMedia = false;
         for (QGraphicsItem* it : hitItems) {
-            if (dynamic_cast<ResizablePixmapItem*>(it)) { hitMedia = true; break; }
+            if (dynamic_cast<ResizableMediaBase*>(it)) { hitMedia = true; break; }
         }
         if (hitMedia) { QGraphicsView::mouseMoveEvent(event); return; }
     }
@@ -1277,7 +1465,7 @@ void ScreenCanvas::mouseReleaseEvent(QMouseEvent* event) {
         // Check if any item was being resized and reset cursor
         bool wasResizing = false;
         for (QGraphicsItem* it : m_scene->items()) {
-            if (auto* rp = dynamic_cast<ResizablePixmapItem*>(it)) {
+            if (auto* rp = dynamic_cast<ResizableMediaBase*>(it)) {
                 if (rp->isActivelyResizing()) {
                     wasResizing = true;
                     break;
