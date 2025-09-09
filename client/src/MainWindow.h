@@ -36,6 +36,8 @@ class QMenu;
 QT_END_NAMESPACE
 
 class SpinnerWidget; // forward declaration for custom loading spinner
+class QGraphicsOpacityEffect;
+class QPropertyAnimation;
 // using QStackedWidget for canvas container switching
 
 // Custom screen canvas widget with zoom and pan capabilities
@@ -131,6 +133,7 @@ private:
     void updateClientList(const QList<ClientInfo>& clients);
     void setUIEnabled(bool enabled);
     void showTrayMessage(const QString& title, const QString& message);
+    void applyAnimationDurations();
     
     // Screen view methods
     void showScreenView(const ClientInfo& client);
@@ -174,6 +177,17 @@ private:
     SpinnerWidget* m_loadingSpinner;
     QPushButton* m_sendButton;
     QPushButton* m_backButton;
+    // Loader/content animations
+    QTimer* m_loaderDelayTimer = nullptr;
+    int m_loaderDelayMs = 1000;     // show spinner after this delay
+    int m_loaderFadeDurationMs = 10s00; // fade-in duration for spinner (loader)
+    int m_fadeDurationMs = 50;        // fade-in duration for canvas and indicators
+    QGraphicsOpacityEffect* m_spinnerOpacity = nullptr;
+    QPropertyAnimation* m_spinnerFade = nullptr;
+    QGraphicsOpacityEffect* m_canvasOpacity = nullptr;
+    QPropertyAnimation* m_canvasFade = nullptr;
+    QGraphicsOpacityEffect* m_volumeOpacity = nullptr;
+    QPropertyAnimation* m_volumeFade = nullptr;
     
     // Menu and actions
     QMenu* m_fileMenu;

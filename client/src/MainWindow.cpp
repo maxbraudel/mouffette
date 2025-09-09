@@ -17,6 +17,8 @@
 #include <QRandomGenerator>
 #include <QPainter>
 #include <QPaintEvent>
+#include <QGraphicsOpacityEffect>
+#include <QPropertyAnimation>
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -40,6 +42,13 @@
 #endif
 
 const QString MainWindow::DEFAULT_SERVER_URL = "ws://192.168.0.188:8080";
+
+// Ensure all fade animations respect the configured duration
+void MainWindow::applyAnimationDurations() {
+    if (m_spinnerFade) m_spinnerFade->setDuration(m_loaderFadeDurationMs);
+    if (m_canvasFade) m_canvasFade->setDuration(m_fadeDurationMs);
+    if (m_volumeFade) m_volumeFade->setDuration(m_fadeDurationMs);
+}
 
 // Simple modern circular line spinner (no Q_OBJECT needed)
 class SpinnerWidget : public QWidget {
@@ -214,10 +223,39 @@ void MainWindow::showScreenView(const ClientInfo& client) {
     // Update client name
     m_clientNameLabel->setText(QString("%1 (%2)").arg(client.getMachineName()).arg(client.getPlatform()));
     
-    // Switch container to spinner page; keep container visible
+    // Reset to spinner state but delay showing the spinner to avoid flicker
     if (m_canvasStack) m_canvasStack->setCurrentIndex(0);
-    if (m_loadingSpinner) { m_loadingSpinner->start(); }
-    if (m_volumeIndicator) m_volumeIndicator->hide();
+    if (m_loadingSpinner) {
+        m_loadingSpinner->stop();
+        m_spinnerFade->stop();
+        m_spinnerOpacity->setOpacity(0.0);
+    }
+    if (m_volumeIndicator) {
+        m_volumeIndicator->hide();
+        m_volumeFade->stop();
+        m_volumeOpacity->setOpacity(0.0);
+    }
+    if (m_canvasFade) m_canvasFade->stop();
+    if (m_canvasOpacity) m_canvasOpacity->setOpacity(0.0);
+    
+    if (m_loaderDelayTimer) {
+        m_loaderDelayTimer->stop();
+        // Prevent multiple connections across navigations
+        QObject::disconnect(m_loaderDelayTimer, nullptr, nullptr, nullptr);
+        connect(m_loaderDelayTimer, &QTimer::timeout, this, [this]() {
+            if (!m_canvasStack || !m_loadingSpinner || !m_spinnerFade || !m_spinnerOpacity) return;
+            m_canvasStack->setCurrentIndex(0);
+            m_spinnerFade->stop();
+            m_spinnerOpacity->setOpacity(0.0);
+            m_loadingSpinner->start();
+            // Spinner uses its own fade duration
+            if (m_spinnerFade) m_spinnerFade->setDuration(m_loaderFadeDurationMs);
+            m_spinnerFade->setStartValue(0.0);
+            m_spinnerFade->setEndValue(1.0);
+            m_spinnerFade->start();
+        });
+        m_loaderDelayTimer->start(m_loaderDelayMs);
+    }
     if (m_screenCanvas) {
         m_screenCanvas->clearScreens();
     }
@@ -888,6 +926,7 @@ void MainWindow::createScreenViewPage() {
     m_loadingSpinner->setLineWidth(6);      // line width in px
     m_loadingSpinner->setColor(QColor("#4a90e2")); // brand blue
     m_loadingSpinner->setMinimumSize(QSize(48, 48));
+    // Spinner page widget wraps the spinner centered
     QWidget* spinnerPage = new QWidget();
     QVBoxLayout* spinnerLayout = new QVBoxLayout(spinnerPage);
     spinnerLayout->setContentsMargins(0,0,0,0);
@@ -895,6 +934,15 @@ void MainWindow::createScreenViewPage() {
     spinnerLayout->addStretch();
     spinnerLayout->addWidget(m_loadingSpinner, 0, Qt::AlignCenter);
     spinnerLayout->addStretch();
+    // Spinner page opacity effect & animation (fade entire loader area)
+    m_spinnerOpacity = new QGraphicsOpacityEffect(spinnerPage);
+    spinnerPage->setGraphicsEffect(m_spinnerOpacity);
+    m_spinnerOpacity->setOpacity(0.0);
+    m_spinnerFade = new QPropertyAnimation(m_spinnerOpacity, "opacity", this);
+    m_spinnerFade->setDuration(m_loaderFadeDurationMs);
+    m_spinnerFade->setStartValue(0.0);
+    m_spinnerFade->setEndValue(1.0);
+    // spinnerPage already created above
 
     // Canvas page
     QWidget* canvasPage = new QWidget();
@@ -904,12 +952,23 @@ void MainWindow::createScreenViewPage() {
     m_screenCanvas = new ScreenCanvas();
     m_screenCanvas->setMinimumHeight(400);
     m_screenCanvas->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    // Ensure viewport repaints fully so opacity effect animates correctly
+    m_screenCanvas->setViewportUpdateMode(QGraphicsView::FullViewportUpdate);
     connect(m_screenCanvas, &ScreenCanvas::screenClicked, this, &MainWindow::onScreenClicked);
     canvasLayout->addWidget(m_screenCanvas);
+    // Canvas/content opacity effect & animation (apply to viewport for QGraphicsView)
+    m_canvasOpacity = new QGraphicsOpacityEffect(m_screenCanvas->viewport());
+    m_screenCanvas->viewport()->setGraphicsEffect(m_canvasOpacity);
+    m_canvasOpacity->setOpacity(0.0);
+    m_canvasFade = new QPropertyAnimation(m_canvasOpacity, "opacity", this);
+    m_canvasFade->setDuration(m_fadeDurationMs);
+    m_canvasFade->setStartValue(0.0);
+    m_canvasFade->setEndValue(1.0);
 
     // Add pages and container to main layout
     m_canvasStack->addWidget(spinnerPage); // index 0: spinner
     m_canvasStack->addWidget(canvasPage);  // index 1: canvas
+    m_canvasStack->setCurrentIndex(1);     // default to canvas page hidden (opacity 0) until data
     m_screenViewLayout->addWidget(m_canvasContainer, 1);
 
     // Ensure focus is on canvas, and block stray key events
@@ -928,6 +987,19 @@ void MainWindow::createScreenViewPage() {
     m_screenViewLayout->setStretch(0, 0); // header
     m_screenViewLayout->setStretch(1, 1); // container expands
     m_screenViewLayout->setStretch(2, 0); // button fixed
+
+    // Volume label opacity effect & animation
+    m_volumeOpacity = new QGraphicsOpacityEffect(m_volumeIndicator);
+    m_volumeIndicator->setGraphicsEffect(m_volumeOpacity);
+    m_volumeOpacity->setOpacity(0.0);
+    m_volumeFade = new QPropertyAnimation(m_volumeOpacity, "opacity", this);
+    m_volumeFade->setDuration(m_fadeDurationMs);
+    m_volumeFade->setStartValue(0.0);
+    m_volumeFade->setEndValue(1.0);
+
+    // Loader delay timer
+    m_loaderDelayTimer = new QTimer(this);
+    m_loaderDelayTimer->setSingleShot(true);
     
     // Add to stacked widget
     m_stackedWidget->addWidget(m_screenViewWidget);
@@ -1284,16 +1356,37 @@ void MainWindow::onScreensInfoReceived(const ClientInfo& clientInfo) {
         m_selectedClient = clientInfo; // keep selected client in sync
         
     // Switch to canvas page and stop spinner; show volume with fresh data
+    if (m_loaderDelayTimer) m_loaderDelayTimer->stop();
     if (m_canvasStack) m_canvasStack->setCurrentIndex(1);
+    if (m_screenCanvas) {
+        m_screenCanvas->viewport()->update();
+        if (m_screenCanvas->scene()) m_screenCanvas->scene()->update();
+    }
     if (m_loadingSpinner) { m_loadingSpinner->stop(); }
         if (m_screenCanvas) {
             m_screenCanvas->setScreens(clientInfo.getScreens());
             m_screenCanvas->recenterWithMargin(33);
             m_screenCanvas->setFocus(Qt::OtherFocusReason);
         }
+        // Fade-in canvas content
+    if (m_canvasFade && m_canvasOpacity) {
+            applyAnimationDurations();
+            m_canvasOpacity->setOpacity(0.0);
+            m_canvasFade->setStartValue(0.0);
+            m_canvasFade->setEndValue(1.0);
+            m_canvasFade->start();
+        }
+        // Update and fade-in volume
         if (m_volumeIndicator) {
+            updateVolumeIndicator();
             m_volumeIndicator->show();
-            updateVolumeIndicator(); // Update with fresh data
+            if (m_volumeFade && m_volumeOpacity) {
+                applyAnimationDurations();
+                m_volumeOpacity->setOpacity(0.0);
+                m_volumeFade->setStartValue(0.0);
+                m_volumeFade->setEndValue(1.0);
+                m_volumeFade->start();
+            }
         }
         
         // Optional: refresh UI labels if platform/machine changed
