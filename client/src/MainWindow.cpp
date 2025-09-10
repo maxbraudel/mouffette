@@ -579,6 +579,13 @@ public:
                         m_player->setPosition(0);
                     }
                     if (m_audio) m_audio->setMuted(m_savedMuted);
+                    // Unlock controls now that the video is ready
+                    m_controlsLockedUntilReady = false;
+                    if (isSelected()) {
+                        setControlsVisible(true);
+                        updateControlsLayout();
+                        update();
+                    }
                 }
             }
             this->update();
@@ -777,6 +784,8 @@ public:
         }
     });
     // Controls are hidden by default (only visible when the item is selected)
+    // Lock controls until video is ready (first frame primed)
+    m_controlsLockedUntilReady = true;
     if (m_controlsBg) m_controlsBg->setVisible(false);
     if (m_playBtnRectItem) m_playBtnRectItem->setVisible(false);
     if (m_playIcon) m_playIcon->setVisible(false);
@@ -915,6 +924,7 @@ public:
     // Expose a helper for view-level control handling
     bool handleControlsPressAtItemPos(const QPointF& itemPos) {
         if (!isSelected()) return false;
+        if (m_controlsLockedUntilReady) return false;
         // Play button
     if (m_playBtnRectItemCoords.contains(itemPos)) { m_holdLastFrameAtEnd = false; togglePlayPause(); return true; }
         // Stop
@@ -995,8 +1005,8 @@ public:
     }
     QRectF boundingRect() const override {
         QRectF br(0,0, baseWidth(), baseHeight());
-        // Only extend for controls when selected
-        if (isSelected()) {
+        // Only extend for controls when selected and unlocked
+        if (isSelected() && !m_controlsLockedUntilReady) {
             const int overrideH = ResizableMediaBase::getHeightOfMediaOverlaysPx();
             // Match label background height exactly when auto
             const qreal labelBgH = (m_labelBg ? m_labelBg->rect().height() : 0.0);
@@ -1015,8 +1025,8 @@ public:
     }
     QPainterPath shape() const override {
         QPainterPath p; p.addRect(QRectF(0,0, baseWidth(), baseHeight()));
-        // controls clickable areas only when selected
-        if (isSelected()) {
+        // controls clickable areas only when selected and unlocked
+        if (isSelected() && !m_controlsLockedUntilReady) {
             if (!m_playBtnRectItemCoords.isNull()) p.addRect(m_playBtnRectItemCoords);
             if (!m_stopBtnRectItemCoords.isNull()) p.addRect(m_stopBtnRectItemCoords);
             if (!m_repeatBtnRectItemCoords.isNull()) p.addRect(m_repeatBtnRectItemCoords);
@@ -1046,16 +1056,16 @@ public:
             event->accept();
             return;
         }
-        // Controls interactions using last computed rects (only when selected)
-        if (isSelected() && m_playBtnRectItemCoords.contains(event->pos())) {
+    // Controls interactions using last computed rects (only when selected and unlocked)
+    if (!m_controlsLockedUntilReady && isSelected() && m_playBtnRectItemCoords.contains(event->pos())) {
             togglePlayPause();
             event->accept();
             return;
         }
-        if (isSelected() && m_stopBtnRectItemCoords.contains(event->pos())) { stopToBeginning(); event->accept(); return; }
-        if (isSelected() && m_repeatBtnRectItemCoords.contains(event->pos())) { toggleRepeat(); event->accept(); return; }
-        if (isSelected() && m_muteBtnRectItemCoords.contains(event->pos())) { toggleMute(); event->accept(); return; }
-        if (isSelected() && m_progRectItemCoords.contains(event->pos())) {
+    if (!m_controlsLockedUntilReady && isSelected() && m_stopBtnRectItemCoords.contains(event->pos())) { stopToBeginning(); event->accept(); return; }
+    if (!m_controlsLockedUntilReady && isSelected() && m_repeatBtnRectItemCoords.contains(event->pos())) { toggleRepeat(); event->accept(); return; }
+    if (!m_controlsLockedUntilReady && isSelected() && m_muteBtnRectItemCoords.contains(event->pos())) { toggleMute(); event->accept(); return; }
+    if (!m_controlsLockedUntilReady && isSelected() && m_progRectItemCoords.contains(event->pos())) {
             qreal r = (event->pos().x() - m_progRectItemCoords.left()) / m_progRectItemCoords.width();
             // Prevent timer from fighting initial press update
             m_seeking = true;
@@ -1066,7 +1076,7 @@ public:
             event->accept();
             return;
         }
-        if (isSelected() && m_volumeRectItemCoords.contains(event->pos())) {
+    if (!m_controlsLockedUntilReady && isSelected() && m_volumeRectItemCoords.contains(event->pos())) {
             qreal r = (event->pos().x() - m_volumeRectItemCoords.left()) / m_volumeRectItemCoords.width();
             r = std::clamp<qreal>(r, 0.0, 1.0);
             if (m_audio) m_audio->setVolume(r);
@@ -1080,7 +1090,7 @@ public:
     }
     void mouseDoubleClickEvent(QGraphicsSceneMouseEvent* event) override {
         // Treat double-clicks on controls the same as single clicks; keep selection
-        if (isSelected()) {
+    if (isSelected() && !m_controlsLockedUntilReady) {
             if (m_playBtnRectItemCoords.contains(event->pos())) {
                 togglePlayPause();
                 event->accept();
@@ -1201,25 +1211,27 @@ private:
         update();
     }
     void setControlsVisible(bool show) {
-        if (m_controlsBg) m_controlsBg->setVisible(show);
-    if (m_playBtnRectItem) m_playBtnRectItem->setVisible(show);
-    if (m_playIcon) m_playIcon->setVisible(show && !(m_player && m_player->playbackState() == QMediaPlayer::PlayingState));
-    if (m_pauseIcon) m_pauseIcon->setVisible(show &&  (m_player && m_player->playbackState() == QMediaPlayer::PlayingState));
-    if (m_stopBtnRectItem) m_stopBtnRectItem->setVisible(show);
-    if (m_stopIcon) m_stopIcon->setVisible(show);
-    if (m_repeatBtnRectItem) m_repeatBtnRectItem->setVisible(show);
-    if (m_repeatIcon) m_repeatIcon->setVisible(show);
-    if (m_muteBtnRectItem) m_muteBtnRectItem->setVisible(show);
-    if (m_muteIcon) m_muteIcon->setVisible(show);
-    if (m_muteSlashIcon) m_muteSlashIcon->setVisible(show && m_audio && m_audio->isMuted());
-    if (m_volumeBgRectItem) m_volumeBgRectItem->setVisible(show);
-    if (m_volumeFillRectItem) m_volumeFillRectItem->setVisible(show);
-        if (m_progressBgRectItem) m_progressBgRectItem->setVisible(show);
-        if (m_progressFillRectItem) m_progressFillRectItem->setVisible(show);
+        const bool allow = show && !m_controlsLockedUntilReady;
+        if (m_controlsBg) m_controlsBg->setVisible(allow);
+        if (m_playBtnRectItem) m_playBtnRectItem->setVisible(allow);
+        if (m_playIcon) m_playIcon->setVisible(allow && !(m_player && m_player->playbackState() == QMediaPlayer::PlayingState));
+        if (m_pauseIcon) m_pauseIcon->setVisible(allow &&  (m_player && m_player->playbackState() == QMediaPlayer::PlayingState));
+        if (m_stopBtnRectItem) m_stopBtnRectItem->setVisible(allow);
+        if (m_stopIcon) m_stopIcon->setVisible(allow);
+        if (m_repeatBtnRectItem) m_repeatBtnRectItem->setVisible(allow);
+        if (m_repeatIcon) m_repeatIcon->setVisible(allow);
+        if (m_muteBtnRectItem) m_muteBtnRectItem->setVisible(allow);
+        if (m_muteIcon) m_muteIcon->setVisible(allow);
+        if (m_muteSlashIcon) m_muteSlashIcon->setVisible(allow && m_audio && m_audio->isMuted());
+        if (m_volumeBgRectItem) m_volumeBgRectItem->setVisible(allow);
+        if (m_volumeFillRectItem) m_volumeFillRectItem->setVisible(allow);
+        if (m_progressBgRectItem) m_progressBgRectItem->setVisible(allow);
+        if (m_progressFillRectItem) m_progressFillRectItem->setVisible(allow);
     }
     void updateControlsLayout() {
         if (!scene() || scene()->views().isEmpty()) return;
         if (!isSelected()) return; // layout only needed when visible
+        if (m_controlsLockedUntilReady) return; // defer until video is ready
         QGraphicsView* v = scene()->views().first();
         // Heights based on filename label height, or explicit override
         const int padYpx = 4;
@@ -1427,6 +1439,8 @@ private:
     qreal m_smoothProgressRatio = 0.0;
     // Guard to suppress timer updates while a seek is settling
     bool m_seeking = false;
+    // Hide/disable controls until first frame is primed
+    bool m_controlsLockedUntilReady = true;
 
 private:
     void updateProgressBar() {
