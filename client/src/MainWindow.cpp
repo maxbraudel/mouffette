@@ -395,6 +395,7 @@ protected:
     QString m_filename;
     QGraphicsRectItem* m_labelBg = nullptr;
     QGraphicsTextItem* m_labelText = nullptr;
+    // Shared overlay height config
     static int heightOfMediaOverlays;
 
     Handle hitTestHandle(const QPointF& p) const {
@@ -577,16 +578,16 @@ public:
     // Controls overlays (ignore transforms so they stay in absolute pixels)
     m_controlsBg = new QGraphicsRectItem(this);
     m_controlsBg->setPen(Qt::NoPen);
-    // Use the same background brush as the filename label to ensure identical color/opacity
-    m_controlsBg->setBrush(m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
+    // Keep container transparent; draw backgrounds on child rects so play is a square, progress is full-width
+    m_controlsBg->setBrush(Qt::NoBrush);
     m_controlsBg->setZValue(100.0);
     m_controlsBg->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_controlsBg->setAcceptedMouseButtons(Qt::NoButton);
 
     m_playBtnRectItem = new QGraphicsRectItem(m_controlsBg);
     m_playBtnRectItem->setPen(Qt::NoPen);
-    // Avoid double-darkening: the parent controls background provides the backdrop
-    m_playBtnRectItem->setBrush(Qt::NoBrush);
+    // Square background for the play button, same as filename label
+    m_playBtnRectItem->setBrush(m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
     m_playBtnRectItem->setZValue(101.0);
     m_playBtnRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_playBtnRectItem->setAcceptedMouseButtons(Qt::NoButton);
@@ -600,8 +601,8 @@ public:
 
     m_progressBgRectItem = new QGraphicsRectItem(m_controlsBg);
     m_progressBgRectItem->setPen(Qt::NoPen);
-    // Avoid double-darkening: rely on the parent controls background
-    m_progressBgRectItem->setBrush(Qt::NoBrush);
+    // Full-width background for the progress row, same as filename label
+    m_progressBgRectItem->setBrush(m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
     m_progressBgRectItem->setZValue(101.0);
     m_progressBgRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_progressBgRectItem->setAcceptedMouseButtons(Qt::NoButton);
@@ -672,8 +673,9 @@ public:
             const qreal labelBgH = (m_labelBg ? m_labelBg->rect().height() : 0.0);
             const int padYpx = 4;
             const int fallbackH = (m_labelText ? static_cast<int>(std::round(m_labelText->boundingRect().height())) + 2*padYpx : 24);
-            const int controlHpx = (overrideH > 0) ? overrideH : (labelBgH > 0 ? static_cast<int>(std::round(labelBgH)) : fallbackH);
-            qreal extra = toItemLengthFromPixels(controlHpx + 8); // include small gap
+            const int rowH = (overrideH > 0) ? overrideH : (labelBgH > 0 ? static_cast<int>(std::round(labelBgH)) : fallbackH);
+            const int gapPx = 8; // outer gap (media-to-controls) and inner gap (between rows)
+            qreal extra = toItemLengthFromPixels(rowH * 2 + 2 * gapPx); // two rows + outer+inner gap
             br.setHeight(br.height() + extra);
         }
         if (isSelected()) {
@@ -775,16 +777,16 @@ private:
         if (!scene() || scene()->views().isEmpty()) return;
         if (!isSelected()) return; // layout only needed when visible
         QGraphicsView* v = scene()->views().first();
-        // Heights based on filename label height
+    // Heights based on filename label height, or explicit override
     const int padYpx = 4;
     const int gapPx = 8;
     const int overrideH = ResizableMediaBase::getHeightOfMediaOverlaysPx();
     const qreal labelBgH = (m_labelBg ? m_labelBg->rect().height() : 0.0);
     const int fallbackH = (m_labelText ? static_cast<int>(std::round(m_labelText->boundingRect().height())) + 2*padYpx : 24);
-    const int controlHpx = (overrideH > 0) ? overrideH : (labelBgH > 0 ? static_cast<int>(std::round(labelBgH)) : fallbackH);
-        const int totalWpx = 260; // absolute width for controls overlay
-        const int playWpx = controlHpx; // square
-        const int progWpx = totalWpx - playWpx;
+    const int rowH = (overrideH > 0) ? overrideH : (labelBgH > 0 ? static_cast<int>(std::round(labelBgH)) : fallbackH);
+    const int totalWpx = 260; // absolute width for controls overlay
+    const int playWpx = rowH; // square button width equals height
+    const int progWpx = totalWpx; // progress spans full width under play
 
         // Compute bottom-center of video in viewport coords
         QPointF bottomCenterItem(baseWidth()/2.0, baseHeight());
@@ -796,50 +798,64 @@ private:
         QPointF ctrlTopLeftScene = v->mapToScene(ctrlTopLeftView.toPoint());
         QPointF ctrlTopLeftItem = mapFromScene(ctrlTopLeftScene);
         if (m_controlsBg) {
-            m_controlsBg->setRect(0, 0, totalWpx, controlHpx);
+            // Background tall enough to hold two rows (play above, progress below) with inner gap
+            m_controlsBg->setRect(0, 0, totalWpx, rowH * 2 + gapPx);
             m_controlsBg->setPos(ctrlTopLeftItem);
         }
         if (m_playBtnRectItem) {
-            m_playBtnRectItem->setRect(0, 0, playWpx, controlHpx);
+            // Top-left cell
+            m_playBtnRectItem->setRect(0, 0, playWpx, rowH);
             m_playBtnRectItem->setPos(0, 0); // relative to controlsBg
         }
         if (m_progressBgRectItem) {
-            m_progressBgRectItem->setRect(0, 0, progWpx, controlHpx);
-            m_progressBgRectItem->setPos(playWpx, 0); // to the right of play button
+            // Second row, spans left to right under play button, with a gap
+            m_progressBgRectItem->setRect(0, 0, progWpx, rowH);
+            m_progressBgRectItem->setPos(0, rowH + gapPx);
         }
         if (m_progressFillRectItem) {
             qreal ratio = (m_durationMs > 0) ? (static_cast<qreal>(m_positionMs) / m_durationMs) : 0.0;
             ratio = std::clamp<qreal>(ratio, 0.0, 1.0);
             const qreal margin = 2.0;
-            m_progressFillRectItem->setRect(margin, margin, (progWpx - 2*margin) * ratio, controlHpx - 2*margin);
+            m_progressFillRectItem->setRect(margin, margin, (progWpx - 2*margin) * ratio, rowH - 2*margin);
         }
         // Update play icon shape
-    if (m_playIcon) {
+        if (m_playIcon) {
             if (m_player && m_player->playbackState() == QMediaPlayer::PlayingState) {
                 // Pause icon: two bars
                 qreal w = playWpx;
-                qreal h = controlHpx;
+                qreal h = rowH;
                 qreal barW = w * 0.25; qreal gap = w * 0.15;
-                QRectF leftBar(w*0.2, h*0.2, barW, h*0.6);
+                QRectF leftBar(0, 0, barW, h*0.6);
+                leftBar.moveTopLeft(QPointF(0, h*0.2));
                 QRectF rightBar(leftBar.adjusted(barW + gap, 0, barW + gap, 0));
                 QPainterPath path;
                 path.addRect(leftBar);
                 path.addRect(rightBar);
-                m_playIcon->setPath(path);
+                // Center the path within the play button square
+                QRectF bb = path.boundingRect();
+                QPointF delta((w - bb.width())/2.0 - bb.left(), (h - bb.height())/2.0 - bb.top());
+                QTransform t; t.translate(delta.x(), delta.y());
+                m_playIcon->setPath(t.map(path));
             } else {
                 // Play icon: triangle
-        QPolygonF poly;
-        poly << QPointF(playWpx*0.35, controlHpx*0.2)
-             << QPointF(playWpx*0.35, controlHpx*0.8)
-             << QPointF(playWpx*0.75, controlHpx*0.5);
-        QPainterPath path; path.addPolygon(poly); path.closeSubpath();
-                m_playIcon->setPath(path);
+                qreal w = playWpx;
+                qreal h = rowH;
+                QPolygonF poly;
+                poly << QPointF(0, h*0.2)
+                     << QPointF(0, h*0.8)
+                     << QPointF(w*0.6, h*0.5);
+                QPainterPath path; path.addPolygon(poly); path.closeSubpath();
+                // Center the path within the play button square
+                QRectF bb = path.boundingRect();
+                QPointF delta((w - bb.width())/2.0 - bb.left(), (h - bb.height())/2.0 - bb.top());
+                QTransform t; t.translate(delta.x(), delta.y());
+                m_playIcon->setPath(t.map(path));
             }
         }
         // Store item-space rects for hit testing on the parent
         // Map viewport-space rectangles back to item coords
-        QRectF playView(ctrlTopLeftView, QSizeF(playWpx, controlHpx));
-        QRectF progView(ctrlTopLeftView + QPointF(playWpx, 0), QSizeF(progWpx, controlHpx));
+    QRectF playView(ctrlTopLeftView, QSizeF(playWpx, rowH));
+    QRectF progView(ctrlTopLeftView + QPointF(0, rowH + gapPx), QSizeF(progWpx, rowH));
         QRectF playScene(v->mapToScene(playView.toRect()).boundingRect());
         QRectF progScene(v->mapToScene(progView.toRect()).boundingRect());
         m_playBtnRectItemCoords = mapFromScene(playScene).boundingRect();
