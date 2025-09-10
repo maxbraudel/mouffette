@@ -30,7 +30,7 @@ set(SOURCES
 
 # Platform-specific sources
 if(APPLE)
-    list(APPEND SOURCES src/MacDockHider.mm)
+    list(APPEND SOURCES src/MacDockHider.mm src/MacCursorHider.mm)
 else()
     # Provide a no-op implementation on non-macOS so linking succeeds
     list(APPEND SOURCES src/MacDockHider.cpp)
@@ -96,5 +96,7 @@ if(APPLE)
     
     # Set Objective-C++ properties for .mm files
     set_source_files_properties(src/MacDockHider.mm PROPERTIES
+        COMPILE_FLAGS "-x objective-c++")
+    set_source_files_properties(src/MacCursorHider.mm PROPERTIES
         COMPILE_FLAGS "-x objective-c++")
 endif()

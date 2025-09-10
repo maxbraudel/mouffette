@@ -36,6 +36,10 @@ QT_BEGIN_NAMESPACE
 class QAction;
 class QMenu;
 QT_END_NAMESPACE
+class QMimeData; // fwd declare for drag preview helpers
+class QMediaPlayer;
+class QVideoSink;
+class QAudioOutput;
 
 class SpinnerWidget; // forward declaration for custom loading spinner
 class QGraphicsOpacityEffect;
@@ -77,6 +81,7 @@ protected:
     // Drag & drop images
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dragMoveEvent(QDragMoveEvent* event) override;
+    void dragLeaveEvent(QDragLeaveEvent* event) override;
     void dropEvent(QDropEvent* event) override;
 
 private:
@@ -104,6 +109,23 @@ private:
     int m_mediaHandleVisualSizePx = 12;     // smaller visual indicator
     // Screen border thickness (px). Applied fully inside the screen rect.
     int m_screenBorderWidthPx = 1;
+    // Drag-and-drop live preview
+    QGraphicsItem* m_dragPreviewItem = nullptr; // pixmap preview during drag
+    QSize m_dragPreviewBaseSize; // logical base size in scene units before scale
+    bool m_dragPreviewIsVideo = false;
+    QPixmap m_dragPreviewPixmap; // for images or rendered video placeholder
+    bool m_dragCursorHidden = false; // hide cursor while dragging over canvas
+    // Live video thumbnail probe
+    QMediaPlayer* m_dragPreviewPlayer = nullptr;
+    QVideoSink* m_dragPreviewSink = nullptr;
+    QAudioOutput* m_dragPreviewAudio = nullptr;
+    bool m_dragPreviewGotFrame = false;
+    void ensureDragPreview(const QMimeData* mime);
+    void updateDragPreviewPos(const QPointF& scenePos);
+    void clearDragPreview();
+    QPixmap makeVideoPlaceholderPixmap(const QSize& pxSize);
+    void startVideoPreviewProbe(const QString& localFilePath);
+    void stopVideoPreviewProbe();
     
     void createScreenItems();
     QGraphicsRectItem* createScreenItem(const ScreenInfo& screen, int index, const QRectF& position);

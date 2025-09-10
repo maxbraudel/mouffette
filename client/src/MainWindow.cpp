@@ -38,6 +38,10 @@
 #include <QtSvg/QSvgRenderer>
 #include <QPainterPathStroker>
 #include <QFileInfo>
+#include <climits>
+#ifdef Q_OS_MACOS
+#include "MacCursorHider.h"
+#endif
 #include <QGraphicsItem>
 #include <QSet>
 #include <QMediaPlayer>
@@ -864,6 +868,17 @@ public:
         });
     }
     void setInitialScaleFactor(qreal f) { m_initialScaleFactor = f; }
+    void setExternalPosterImage(const QImage& img) {
+        if (!img.isNull()) {
+            m_posterImage = img;
+            m_posterImageSet = true;
+            // Adopt the natural size of the poster immediately to avoid any temporary distortion
+            if (!m_adoptedSize) {
+                adoptBaseSize(img.size());
+            }
+            update();
+        }
+    }
     // Drag helpers for view-level coordination
     bool isDraggingProgress() const { return m_draggingProgress; }
     bool isDraggingVolume() const { return m_draggingVolume; }
@@ -935,15 +950,41 @@ public:
     updateControlsLayout();
         // Draw current frame; otherwise if available, draw poster image; avoid black placeholder to prevent flicker
         QRectF br(0,0, baseWidth(), baseHeight());
+        auto fitRect = [](const QRectF& bounds, const QSize& imgSz) -> QRectF {
+            if (bounds.isEmpty() || imgSz.isEmpty()) return bounds;
+            const qreal brW = bounds.width();
+            const qreal brH = bounds.height();
+            const qreal imgW = imgSz.width();
+            const qreal imgH = imgSz.height();
+            if (imgW <= 0 || imgH <= 0) return bounds;
+            const qreal brAR = brW / brH;
+            const qreal imgAR = imgW / imgH;
+            if (imgAR > brAR) {
+                // image is wider; fit width
+                const qreal h = brW / imgAR;
+                return QRectF(bounds.left(), bounds.top() + (brH - h)/2.0, brW, h);
+            } else {
+                // image is taller; fit height
+                const qreal w = brH * imgAR;
+                return QRectF(bounds.left() + (brW - w)/2.0, bounds.top(), w, brH);
+            }
+        };
         if (!m_lastFrameImage.isNull()) {
-            painter->drawImage(br, m_lastFrameImage);
+            QRectF dst = fitRect(br, m_lastFrameImage.size());
+            painter->drawImage(dst, m_lastFrameImage);
         } else if (m_lastFrame.isValid()) {
             // One-time fallback if cache not yet populated
             QImage img = m_lastFrame.toImage();
-            if (!img.isNull()) painter->drawImage(br, img);
-            else if (m_posterImageSet && !m_posterImage.isNull()) painter->drawImage(br, m_posterImage);
+            if (!img.isNull()) {
+                QRectF dst = fitRect(br, img.size());
+                painter->drawImage(dst, img);
+            } else if (m_posterImageSet && !m_posterImage.isNull()) {
+                QRectF dst = fitRect(br, m_posterImage.size());
+                painter->drawImage(dst, m_posterImage);
+            }
         } else if (m_posterImageSet && !m_posterImage.isNull()) {
-            painter->drawImage(br, m_posterImage);
+            QRectF dst = fitRect(br, m_posterImage.size());
+            painter->drawImage(dst, m_posterImage);
         }
     // Pause icon visibility is controlled elsewhere; avoid layout work during paint
         // Selection/handles and label
@@ -1616,7 +1657,8 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
             QWidget* w = qobject_cast<QWidget*>(obj);
             bool onCanvas = false;
             if (m_screenCanvas) {
-                onCanvas = (w == m_screenCanvas) || (w && m_screenCanvas->isAncestorOf(w));
+                QWidget* canvasWidget = m_screenCanvas;
+                onCanvas = (w == canvasWidget) || (w && canvasWidget->isAncestorOf(w));
             }
             if (!onCanvas) {
                 return true; // consume outside the canvas
@@ -1805,6 +1847,16 @@ void ScreenCanvas::setMediaHandleSizePx(int px) {
 // Drag & drop handlers
 void ScreenCanvas::dragEnterEvent(QDragEnterEvent* event) {
     if (event->mimeData()->hasUrls() || event->mimeData()->hasImage()) {
+        ensureDragPreview(event->mimeData());
+        updateDragPreviewPos(mapToScene(event->position().toPoint()));
+    if (!m_dragCursorHidden) {
+#ifdef Q_OS_MACOS
+        MacCursorHider::hide();
+#else
+        QApplication::setOverrideCursor(Qt::BlankCursor);
+#endif
+        m_dragCursorHidden = true;
+    }
         event->acceptProposedAction();
     } else {
         QGraphicsView::dragEnterEvent(event);
@@ -1813,9 +1865,24 @@ void ScreenCanvas::dragEnterEvent(QDragEnterEvent* event) {
 
 void ScreenCanvas::dragMoveEvent(QDragMoveEvent* event) {
     if (event->mimeData()->hasUrls() || event->mimeData()->hasImage()) {
+        ensureDragPreview(event->mimeData());
+        updateDragPreviewPos(mapToScene(event->position().toPoint()));
         event->acceptProposedAction();
     } else {
         QGraphicsView::dragMoveEvent(event);
+    }
+}
+
+void ScreenCanvas::dragLeaveEvent(QDragLeaveEvent* event) {
+    Q_UNUSED(event);
+    clearDragPreview();
+    if (m_dragCursorHidden) {
+#ifdef Q_OS_MACOS
+    MacCursorHider::show();
+#else
+    QApplication::restoreOverrideCursor();
+#endif
+    m_dragCursorHidden = false;
     }
 }
 
@@ -1861,6 +1928,10 @@ void ScreenCanvas::dropEvent(QDropEvent* event) {
             const double h = 360.0 * m_scaleFactor;
             vitem->setPos(scenePos.x() - w/2.0, scenePos.y() - h/2.0);
             m_scene->addItem(vitem);
+            // If a real preview frame exists, set it as poster after adding to the scene
+            if (!m_dragPreviewPixmap.isNull()) {
+                vitem->setExternalPosterImage(m_dragPreviewPixmap.toImage());
+            }
         } else {
             QGraphicsView::dropEvent(event);
             return;
@@ -1871,6 +1942,173 @@ void ScreenCanvas::dropEvent(QDropEvent* event) {
     }
     ensureZOrder();
     event->acceptProposedAction();
+    // Keep the preview visible at the drop location briefly until the new item paints, then clear
+    clearDragPreview();
+    if (m_dragCursorHidden) {
+#ifdef Q_OS_MACOS
+    MacCursorHider::show();
+#else
+    QApplication::restoreOverrideCursor();
+#endif
+    m_dragCursorHidden = false;
+    }
+}
+
+void ScreenCanvas::ensureDragPreview(const QMimeData* mime) {
+    if (!m_scene) return;
+    if (m_dragPreviewItem) return; // already created
+    QPixmap preview;
+    m_dragPreviewIsVideo = false;
+    m_dragPreviewPixmap = QPixmap();
+    m_dragPreviewBaseSize = QSize();
+    // Try image data directly
+    if (mime->hasImage()) {
+        QImage img = qvariant_cast<QImage>(mime->imageData());
+        if (!img.isNull()) {
+            preview = QPixmap::fromImage(img);
+        }
+    }
+    // Or a local file URL
+    if (preview.isNull() && mime->hasUrls()) {
+        const auto urls = mime->urls();
+        if (!urls.isEmpty()) {
+            const QUrl& url = urls.first();
+            const QString path = url.toLocalFile();
+            if (!path.isEmpty()) {
+                const QString ext = QFileInfo(path).suffix().toLower();
+                static const QSet<QString> kVideoExts = {"mp4","mov","m4v","avi","mkv","webm"};
+                if (kVideoExts.contains(ext)) {
+                    m_dragPreviewIsVideo = true;
+                    // Start background probe to fetch first frame ASAP
+                    startVideoPreviewProbe(path);
+                    // Temporary placeholder (16:9) until first frame arrives
+                    preview = makeVideoPlaceholderPixmap(QSize(320, 180));
+                } else {
+                    preview.load(path); // may fail if not an image
+                }
+            }
+        }
+    }
+    if (preview.isNull()) {
+        // Fallback empty placeholder
+        preview = makeVideoPlaceholderPixmap(QSize(320, 180));
+        m_dragPreviewIsVideo = true;
+    }
+    m_dragPreviewPixmap = preview;
+    m_dragPreviewBaseSize = preview.size();
+    // Create a QGraphicsPixmapItem as the preview
+    auto* pmItem = new QGraphicsPixmapItem(preview);
+    pmItem->setOpacity(0.85);
+    pmItem->setZValue(5000.0); // on top of everything during drag
+    pmItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, false); // scale with scene factor
+    // Apply initial scale to match our canvas scale factor
+    pmItem->setScale(m_scaleFactor);
+    m_scene->addItem(pmItem);
+    m_dragPreviewItem = pmItem;
+}
+
+void ScreenCanvas::updateDragPreviewPos(const QPointF& scenePos) {
+    if (!m_dragPreviewItem) return;
+    const QSize sz = m_dragPreviewBaseSize.isValid() ? m_dragPreviewBaseSize : QSize(320,180);
+    const double w = sz.width() * m_scaleFactor;
+    const double h = sz.height() * m_scaleFactor;
+    m_dragPreviewItem->setPos(scenePos.x() - w/2.0, scenePos.y() - h/2.0);
+}
+
+void ScreenCanvas::clearDragPreview() {
+    if (m_dragPreviewItem && m_scene) {
+        m_scene->removeItem(m_dragPreviewItem);
+        delete m_dragPreviewItem;
+    }
+    m_dragPreviewItem = nullptr;
+    m_dragPreviewBaseSize = QSize();
+    m_dragPreviewPixmap = QPixmap();
+    m_dragPreviewIsVideo = false;
+    stopVideoPreviewProbe();
+}
+
+QPixmap ScreenCanvas::makeVideoPlaceholderPixmap(const QSize& pxSize) {
+    QSize s = pxSize.isValid() ? pxSize : QSize(320, 180);
+    QPixmap pm(s);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing);
+    QColor bg(0,0,0,180);
+    p.setBrush(bg);
+    p.setPen(Qt::NoPen);
+    const qreal r = 8.0;
+    p.drawRoundedRect(QRectF(0,0,s.width(), s.height()), r, r);
+    // Draw a simple play triangle in the center
+    const qreal triW = s.width() * 0.18;
+    const qreal triH = triW * 1.0;
+    QPointF c(s.width()/2.0, s.height()/2.0);
+    QPolygonF tri;
+    tri << QPointF(c.x() - triW/3.0, c.y() - triH/2.0)
+        << QPointF(c.x() - triW/3.0, c.y() + triH/2.0)
+        << QPointF(c.x() + triW*0.7, c.y());
+    p.setBrush(QColor(255,255,255,230));
+    p.drawPolygon(tri);
+    p.end();
+    return pm;
+}
+
+void ScreenCanvas::startVideoPreviewProbe(const QString& localFilePath) {
+    stopVideoPreviewProbe();
+    m_dragPreviewGotFrame = false;
+    m_dragPreviewPlayer = new QMediaPlayer(this);
+    m_dragPreviewAudio = new QAudioOutput(this);
+    m_dragPreviewAudio->setMuted(true);
+    m_dragPreviewPlayer->setAudioOutput(m_dragPreviewAudio);
+    m_dragPreviewSink = new QVideoSink(this);
+    m_dragPreviewPlayer->setVideoSink(m_dragPreviewSink);
+    m_dragPreviewPlayer->setSource(QUrl::fromLocalFile(localFilePath));
+    // When the first frame arrives, swap the preview pixmap and keep center fixed
+    connect(m_dragPreviewSink, &QVideoSink::videoFrameChanged, this, [this](const QVideoFrame& f){
+        if (m_dragPreviewGotFrame || !f.isValid()) return;
+        QImage img = f.toImage();
+        if (img.isNull()) return;
+        m_dragPreviewGotFrame = true;
+        QPixmap newPm = QPixmap::fromImage(img);
+        if (newPm.isNull()) return;
+        QPointF centerScene;
+        if (m_dragPreviewItem) {
+            const QSize oldSz = m_dragPreviewBaseSize.isValid() ? m_dragPreviewBaseSize : newPm.size();
+            const double w = oldSz.width() * m_scaleFactor;
+            const double h = oldSz.height() * m_scaleFactor;
+            QPointF topLeft = m_dragPreviewItem->pos();
+            centerScene = QPointF(topLeft.x() + w/2.0, topLeft.y() + h/2.0);
+        }
+        m_dragPreviewPixmap = newPm;
+        m_dragPreviewBaseSize = newPm.size();
+        if (auto* pmItem = qgraphicsitem_cast<QGraphicsPixmapItem*>(m_dragPreviewItem)) {
+            pmItem->setPixmap(m_dragPreviewPixmap);
+        }
+        if (m_dragPreviewItem && centerScene != QPointF()) {
+            const double nw = m_dragPreviewBaseSize.width() * m_scaleFactor;
+            const double nh = m_dragPreviewBaseSize.height() * m_scaleFactor;
+            m_dragPreviewItem->setPos(centerScene.x() - nw/2.0, centerScene.y() - nh/2.0);
+        }
+        // Pause immediately; we only needed the first frame
+        if (m_dragPreviewPlayer) m_dragPreviewPlayer->pause();
+    });
+    // Start playback to decode a frame
+    m_dragPreviewPlayer->play();
+}
+
+void ScreenCanvas::stopVideoPreviewProbe() {
+    if (m_dragPreviewPlayer) {
+        m_dragPreviewPlayer->stop();
+        m_dragPreviewPlayer->deleteLater();
+        m_dragPreviewPlayer = nullptr;
+    }
+    if (m_dragPreviewSink) {
+        m_dragPreviewSink->deleteLater();
+        m_dragPreviewSink = nullptr;
+    }
+    if (m_dragPreviewAudio) {
+        m_dragPreviewAudio->deleteLater();
+        m_dragPreviewAudio = nullptr;
+    }
 }
 
 QGraphicsRectItem* ScreenCanvas::createScreenItem(const ScreenInfo& screen, int index, const QRectF& position) {
