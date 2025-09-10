@@ -185,6 +185,10 @@ public:
         m_labelText->setAcceptedMouseButtons(Qt::NoButton);
         updateLabelLayout();
     }
+    // Global override (in pixels) for the height of media overlays (e.g., video controls).
+    // -1 means "auto" (use filename label background height).
+    static void setHeightOfMediaOverlaysPx(int px) { heightOfMediaOverlays = px; }
+    static int getHeightOfMediaOverlaysPx() { return heightOfMediaOverlays; }
     // Utility for view: tell if a given item-space pos is on a resize handle
     bool isOnHandleAtItemPos(const QPointF& itemPos) const {
         return hitTestHandle(itemPos) != None;
@@ -391,6 +395,7 @@ protected:
     QString m_filename;
     QGraphicsRectItem* m_labelBg = nullptr;
     QGraphicsTextItem* m_labelText = nullptr;
+    static int heightOfMediaOverlays;
 
     Handle hitTestHandle(const QPointF& p) const {
         // Only allow handle interaction when selected
@@ -478,6 +483,9 @@ protected:
         m_labelBg->setPos(labelTopLeftItem);
     }
 };
+
+// Default: auto (match filename label background height)
+int ResizableMediaBase::heightOfMediaOverlays = -1;
 
 // Image media implementation using the shared base
 class ResizablePixmapItem : public ResizableMediaBase {
@@ -659,8 +667,12 @@ public:
         QRectF br(0,0, baseWidth(), baseHeight());
         // Only extend for controls when selected
         if (isSelected()) {
-            int padYpx = 4;
-            int controlHpx = (m_labelText ? static_cast<int>(m_labelText->boundingRect().height()) + 2*padYpx : 24);
+            const int overrideH = ResizableMediaBase::getHeightOfMediaOverlaysPx();
+            // Match label background height exactly when auto
+            const qreal labelBgH = (m_labelBg ? m_labelBg->rect().height() : 0.0);
+            const int padYpx = 4;
+            const int fallbackH = (m_labelText ? static_cast<int>(std::round(m_labelText->boundingRect().height())) + 2*padYpx : 24);
+            const int controlHpx = (overrideH > 0) ? overrideH : (labelBgH > 0 ? static_cast<int>(std::round(labelBgH)) : fallbackH);
             qreal extra = toItemLengthFromPixels(controlHpx + 8); // include small gap
             br.setHeight(br.height() + extra);
         }
@@ -764,9 +776,12 @@ private:
         if (!isSelected()) return; // layout only needed when visible
         QGraphicsView* v = scene()->views().first();
         // Heights based on filename label height
-        const int padYpx = 4;
-        const int gapPx = 8;
-        const int controlHpx = (m_labelText ? static_cast<int>(m_labelText->boundingRect().height()) + 2*padYpx : 24);
+    const int padYpx = 4;
+    const int gapPx = 8;
+    const int overrideH = ResizableMediaBase::getHeightOfMediaOverlaysPx();
+    const qreal labelBgH = (m_labelBg ? m_labelBg->rect().height() : 0.0);
+    const int fallbackH = (m_labelText ? static_cast<int>(std::round(m_labelText->boundingRect().height())) + 2*padYpx : 24);
+    const int controlHpx = (overrideH > 0) ? overrideH : (labelBgH > 0 ? static_cast<int>(std::round(labelBgH)) : fallbackH);
         const int totalWpx = 260; // absolute width for controls overlay
         const int playWpx = controlHpx; // square
         const int progWpx = totalWpx - playWpx;
