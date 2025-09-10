@@ -2026,6 +2026,10 @@ void ScreenCanvas::recenterWithMargin(int marginPx) {
     t.scale(s, s);
     setTransform(t);
     centerOn(bounds.center());
+    // Start momentum suppression: ignore decaying inertial scroll deltas until an increase occurs
+    m_ignorePanMomentum = true;
+    m_momentumPrimed = false;
+    m_lastMomentumMag = 0.0;
 }
 
 void ScreenCanvas::keyPressEvent(QKeyEvent* event) {
@@ -2377,6 +2381,27 @@ void ScreenCanvas::wheelEvent(QWheelEvent* event) {
         delta = event->angleDelta() / 8; // small scaling for smoother feel
     }
     if (!delta.isNull()) {
+        // Momentum suppression: after recenter, ignore decreasing inertial deltas
+        if (m_ignorePanMomentum) {
+            // Use Manhattan length for magnitude (direction-agnostic); on macOS trackpad it's smooth
+            const double mag = std::abs(delta.x()) + std::abs(delta.y());
+            if (!m_momentumPrimed) {
+                // First observed delta after centering becomes the baseline
+                m_momentumPrimed = true;
+                m_lastMomentumMag = mag;
+                event->accept();
+                return; // ignore this one as well (cut motion immediately)
+            } else {
+                if (mag <= m_lastMomentumMag + 1e-6) {
+                    // Still decaying or equal: keep ignoring
+                    m_lastMomentumMag = mag;
+                    event->accept();
+                    return;
+                }
+                // Momentum ended (increase detected) -> stop suppression and process normally
+                m_ignorePanMomentum = false;
+            }
+        }
         horizontalScrollBar()->setValue(horizontalScrollBar()->value() - delta.x());
         verticalScrollBar()->setValue(verticalScrollBar()->value() - delta.y());
         event->accept();
