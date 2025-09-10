@@ -759,7 +759,7 @@ public:
     // Connect timer to update progress smoothly during playback
     QObject::connect(m_progressTimer, &QTimer::timeout, [this]() {
         if (m_player && m_player->playbackState() == QMediaPlayer::PlayingState && 
-            !m_draggingProgress && !m_holdLastFrameAtEnd && m_durationMs > 0) {
+            !m_draggingProgress && !m_holdLastFrameAtEnd && !m_seeking && m_durationMs > 0) {
             // Calculate smooth progress based on current player position
             qint64 currentPos = m_player->position();
             qreal newRatio = static_cast<qreal>(currentPos) / m_durationMs;
@@ -841,12 +841,25 @@ public:
     void seekToRatio(qreal r) {
         if (!m_player || m_durationMs <= 0) return;
         r = std::clamp<qreal>(r, 0.0, 1.0);
-    m_holdLastFrameAtEnd = false;
-    qint64 pos = static_cast<qint64>(r * m_durationMs);
-    m_player->setPosition(pos);
-    m_positionMs = pos;
-    updateControlsLayout();
-    update();
+        m_holdLastFrameAtEnd = false;
+        // Suppress timer updates briefly to avoid flicker back to old position
+        m_seeking = true;
+        if (m_progressTimer) m_progressTimer->stop();
+        // Update local UI state immediately
+        m_smoothProgressRatio = r;
+        m_positionMs = static_cast<qint64>(r * m_durationMs);
+        updateProgressBar();
+        updateControlsLayout();
+        update();
+        // Perform the actual seek
+        const qint64 pos = m_positionMs;
+        m_player->setPosition(pos);
+        // Re-enable timer after a short delay to allow backend to settle
+        QTimer::singleShot(30, [this]() {
+            m_seeking = false;
+            if (m_progressTimer && m_player && m_player->playbackState() == QMediaPlayer::PlayingState)
+                m_progressTimer->start();
+        });
     }
     void setInitialScaleFactor(qreal f) { m_initialScaleFactor = f; }
     // Drag helpers for view-level coordination
@@ -997,6 +1010,9 @@ public:
         if (isSelected() && m_muteBtnRectItemCoords.contains(event->pos())) { toggleMute(); event->accept(); return; }
         if (isSelected() && m_progRectItemCoords.contains(event->pos())) {
             qreal r = (event->pos().x() - m_progRectItemCoords.left()) / m_progRectItemCoords.width();
+            // Prevent timer from fighting initial press update
+            m_seeking = true;
+            if (m_progressTimer) m_progressTimer->stop();
             seekToRatio(r);
             m_draggingProgress = true;
             grabMouse();
@@ -1102,6 +1118,12 @@ protected:
             m_draggingProgress = false;
             m_draggingVolume = false;
             ungrabMouse();
+            // Allow timer to resume after a beat so backend position has caught up
+            QTimer::singleShot(30, [this]() {
+                m_seeking = false;
+                if (m_progressTimer && m_player && m_player->playbackState() == QMediaPlayer::PlayingState)
+                    m_progressTimer->start();
+            });
             event->accept();
             return;
         }
@@ -1441,9 +1463,11 @@ private:
     bool m_draggingVolume = false;
     // Hold last frame after EndOfMedia until next user action
     bool m_holdLastFrameAtEnd = false;
-    // Smooth progress animation
+    // Smooth progress updates
     QTimer* m_progressTimer = nullptr;
     qreal m_smoothProgressRatio = 0.0;
+    // Guard to suppress timer updates while a seek is settling
+    bool m_seeking = false;
 
 private:
     void updateProgressBar() {
