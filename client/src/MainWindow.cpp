@@ -19,9 +19,7 @@
 #include <QPaintEvent>
 #include <QGraphicsOpacityEffect>
 #include <QPropertyAnimation>
-#include <QVariantAnimation>
 #include <QTimer>
-#include <QEasingCurve>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QDragMoveEvent>
@@ -648,13 +646,7 @@ public:
     QObject::connect(m_player, &QMediaPlayer::positionChanged, [this](qint64 p){
         if (m_holdLastFrameAtEnd) return; // keep progress pinned at end until user action
         m_positionMs = p; 
-        // Update progress directly for smooth real-time movement
-        if (!m_draggingProgress) {
-            qreal newRatio = (m_durationMs > 0) ? (static_cast<qreal>(p) / m_durationMs) : 0.0;
-            m_smoothProgressRatio = std::clamp<qreal>(newRatio, 0.0, 1.0);
-            updateProgressBar();
-        }
-        this->update();
+        // Progress updates are handled by the timer for smooth real-time movement
     });
 
     // Controls overlays (ignore transforms so they stay in absolute pixels)
@@ -762,7 +754,7 @@ public:
     
     // Initialize smooth progress timer for real-time updates
     m_progressTimer = new QTimer();
-    m_progressTimer->setInterval(16); // ~60fps updates for smooth progress
+    m_progressTimer->setInterval(33); // ~30fps updates for smooth progress (more efficient than 60fps)
     
     // Connect timer to update progress smoothly during playback
     QObject::connect(m_progressTimer, &QTimer::timeout, [this]() {
@@ -1452,14 +1444,7 @@ private:
     // Smooth progress animation
     QTimer* m_progressTimer = nullptr;
     qreal m_smoothProgressRatio = 0.0;
-public:
-    // Property for smooth progress animation
-    Q_PROPERTY(qreal smoothProgressRatio READ smoothProgressRatio WRITE setSmoothProgressRatio)
-    qreal smoothProgressRatio() const { return m_smoothProgressRatio; }
-    void setSmoothProgressRatio(qreal ratio) {
-        m_smoothProgressRatio = ratio;
-        updateProgressBar();
-    }
+
 private:
     void updateProgressBar() {
         if (!m_progressFillRectItem) return;
