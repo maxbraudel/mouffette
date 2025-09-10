@@ -30,7 +30,7 @@ set(SOURCES
 
 # Platform-specific sources
 if(APPLE)
-    list(APPEND SOURCES src/MacDockHider.mm src/MacCursorHider.mm)
+    list(APPEND SOURCES src/MacDockHider.mm src/MacCursorHider.mm src/MacVideoThumbnailer.mm)
 else()
     # Provide a no-op implementation on non-macOS so linking succeeds
     list(APPEND SOURCES src/MacDockHider.cpp)
@@ -42,6 +42,7 @@ set(HEADERS
     src/WebSocketClient.h
     src/ClientInfo.h
     src/MacDockHider.h
+    src/MacVideoThumbnailer.h
 )
 
 # UI files
@@ -91,12 +92,12 @@ if(APPLE)
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/Info.plist
     )
-    # Link with AppKit framework for NSApp functionality
-    target_link_libraries(MouffetteClient "-framework AppKit")
+    # Link with macOS frameworks for cursor and AVFoundation thumbnailing
+    target_link_libraries(MouffetteClient "-framework AppKit" "-framework AVFoundation" "-framework CoreMedia" "-framework CoreGraphics")
     
     # Set Objective-C++ properties for .mm files
     set_source_files_properties(src/MacDockHider.mm PROPERTIES
         COMPILE_FLAGS "-x objective-c++")
-    set_source_files_properties(src/MacCursorHider.mm PROPERTIES
-        COMPILE_FLAGS "-x objective-c++")
+    set_source_files_properties(src/MacCursorHider.mm PROPERTIES COMPILE_FLAGS "-x objective-c++")
+    set_source_files_properties(src/MacVideoThumbnailer.mm PROPERTIES COMPILE_FLAGS "-x objective-c++")
 endif()

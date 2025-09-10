@@ -19,6 +19,7 @@
 #include <QPaintEvent>
 #include <QGraphicsOpacityEffect>
 #include <QPropertyAnimation>
+#include <QVariantAnimation>
 #include <QTimer>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -41,6 +42,7 @@
 #include <climits>
 #ifdef Q_OS_MACOS
 #include "MacCursorHider.h"
+#include "MacVideoThumbnailer.h"
 #endif
 #include <QGraphicsItem>
 #include <QSet>
@@ -49,6 +51,7 @@
 #include <QVideoSink>
 #include <QMediaMetaData>
 #include <QVideoFrame>
+#include <thread>
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -1847,8 +1850,9 @@ void ScreenCanvas::setMediaHandleSizePx(int px) {
 // Drag & drop handlers
 void ScreenCanvas::dragEnterEvent(QDragEnterEvent* event) {
     if (event->mimeData()->hasUrls() || event->mimeData()->hasImage()) {
-        ensureDragPreview(event->mimeData());
-        updateDragPreviewPos(mapToScene(event->position().toPoint()));
+    ensureDragPreview(event->mimeData());
+    m_dragPreviewLastScenePos = mapToScene(event->position().toPoint());
+    updateDragPreviewPos(m_dragPreviewLastScenePos);
     if (!m_dragCursorHidden) {
 #ifdef Q_OS_MACOS
         MacCursorHider::hide();
@@ -1865,8 +1869,9 @@ void ScreenCanvas::dragEnterEvent(QDragEnterEvent* event) {
 
 void ScreenCanvas::dragMoveEvent(QDragMoveEvent* event) {
     if (event->mimeData()->hasUrls() || event->mimeData()->hasImage()) {
-        ensureDragPreview(event->mimeData());
-        updateDragPreviewPos(mapToScene(event->position().toPoint()));
+    ensureDragPreview(event->mimeData());
+    m_dragPreviewLastScenePos = mapToScene(event->position().toPoint());
+    updateDragPreviewPos(m_dragPreviewLastScenePos);
         event->acceptProposedAction();
     } else {
         QGraphicsView::dragMoveEvent(event);
@@ -1913,7 +1918,10 @@ void ScreenCanvas::dropEvent(QDropEvent* event) {
         item->setFlags(QGraphicsItem::ItemIsMovable | QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemSendsGeometryChanges);
         item->setPos(scenePos.x() - w/2.0, scenePos.y() - h/2.0);
         if (image.width() > 0) item->setScale(w / image.width());
-        m_scene->addItem(item);
+    m_scene->addItem(item);
+    // Auto-select the newly dropped item
+    if (m_scene) m_scene->clearSelection();
+    item->setSelected(true);
     } else if (!droppedPath.isEmpty()) {
         // Decide if it's a video by extension
         const QString ext = QFileInfo(droppedPath).suffix().toLower();
@@ -1928,6 +1936,9 @@ void ScreenCanvas::dropEvent(QDropEvent* event) {
             const double h = 360.0 * m_scaleFactor;
             vitem->setPos(scenePos.x() - w/2.0, scenePos.y() - h/2.0);
             m_scene->addItem(vitem);
+            // Auto-select the newly dropped video item
+            if (m_scene) m_scene->clearSelection();
+            vitem->setSelected(true);
             // If a real preview frame exists, set it as poster after adding to the scene
             if (!m_dragPreviewPixmap.isNull()) {
                 vitem->setExternalPosterImage(m_dragPreviewPixmap.toImage());
@@ -1979,32 +1990,30 @@ void ScreenCanvas::ensureDragPreview(const QMimeData* mime) {
                 static const QSet<QString> kVideoExts = {"mp4","mov","m4v","avi","mkv","webm"};
                 if (kVideoExts.contains(ext)) {
                     m_dragPreviewIsVideo = true;
-                    // Start background probe to fetch first frame ASAP
+                    // Start background probe to fetch first frame ASAP; do not show any placeholder
                     startVideoPreviewProbe(path);
-                    // Temporary placeholder (16:9) until first frame arrives
-                    preview = makeVideoPlaceholderPixmap(QSize(320, 180));
+                    // Return early: we'll create the pixmap item when the first frame arrives
+                    return;
                 } else {
                     preview.load(path); // may fail if not an image
                 }
             }
         }
     }
-    if (preview.isNull()) {
-        // Fallback empty placeholder
-        preview = makeVideoPlaceholderPixmap(QSize(320, 180));
-        m_dragPreviewIsVideo = true;
-    }
+    if (preview.isNull()) return; // nothing to preview yet
     m_dragPreviewPixmap = preview;
     m_dragPreviewBaseSize = preview.size();
     // Create a QGraphicsPixmapItem as the preview
     auto* pmItem = new QGraphicsPixmapItem(preview);
-    pmItem->setOpacity(0.85);
+    // Start from transparent and fade in
+    pmItem->setOpacity(0.0);
     pmItem->setZValue(5000.0); // on top of everything during drag
     pmItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, false); // scale with scene factor
     // Apply initial scale to match our canvas scale factor
     pmItem->setScale(m_scaleFactor);
     m_scene->addItem(pmItem);
     m_dragPreviewItem = pmItem;
+    startDragPreviewFadeIn();
 }
 
 void ScreenCanvas::updateDragPreviewPos(const QPointF& scenePos) {
@@ -2016,6 +2025,7 @@ void ScreenCanvas::updateDragPreviewPos(const QPointF& scenePos) {
 }
 
 void ScreenCanvas::clearDragPreview() {
+    stopDragPreviewFade();
     if (m_dragPreviewItem && m_scene) {
         m_scene->removeItem(m_dragPreviewItem);
         delete m_dragPreviewItem;
@@ -2055,6 +2065,31 @@ QPixmap ScreenCanvas::makeVideoPlaceholderPixmap(const QSize& pxSize) {
 void ScreenCanvas::startVideoPreviewProbe(const QString& localFilePath) {
     stopVideoPreviewProbe();
     m_dragPreviewGotFrame = false;
+#ifdef Q_OS_MACOS
+    // Launch a very fast first-frame extraction via AVFoundation on a background thread
+    if (m_dragPreviewFallbackTimer) { m_dragPreviewFallbackTimer->stop(); m_dragPreviewFallbackTimer->deleteLater(); m_dragPreviewFallbackTimer = nullptr; }
+    QString pathCopy = localFilePath;
+    std::thread([this, pathCopy]() {
+        QImage img = MacVideoThumbnailer::firstFrame(pathCopy);
+        if (!img.isNull()) {
+            QImage copy = img;
+            QMetaObject::invokeMethod(this, [this, copy]() { onFastVideoThumbnailReady(copy); }, Qt::QueuedConnection);
+        }
+    }).detach();
+    // Fallback: if fast path doesn't answer quickly, start the decoder-based probe
+    m_dragPreviewFallbackTimer = new QTimer(this);
+    m_dragPreviewFallbackTimer->setSingleShot(true);
+    connect(m_dragPreviewFallbackTimer, &QTimer::timeout, this, [this, localFilePath]() {
+        startVideoPreviewProbeFallback(localFilePath);
+    });
+    m_dragPreviewFallbackTimer->start(120); // short grace period
+#else
+    startVideoPreviewProbeFallback(localFilePath);
+#endif
+}
+
+void ScreenCanvas::startVideoPreviewProbeFallback(const QString& localFilePath) {
+    if (m_dragPreviewPlayer) return; // already running
     m_dragPreviewPlayer = new QMediaPlayer(this);
     m_dragPreviewAudio = new QAudioOutput(this);
     m_dragPreviewAudio->setMuted(true);
@@ -2062,7 +2097,6 @@ void ScreenCanvas::startVideoPreviewProbe(const QString& localFilePath) {
     m_dragPreviewSink = new QVideoSink(this);
     m_dragPreviewPlayer->setVideoSink(m_dragPreviewSink);
     m_dragPreviewPlayer->setSource(QUrl::fromLocalFile(localFilePath));
-    // When the first frame arrives, swap the preview pixmap and keep center fixed
     connect(m_dragPreviewSink, &QVideoSink::videoFrameChanged, this, [this](const QVideoFrame& f){
         if (m_dragPreviewGotFrame || !f.isValid()) return;
         QImage img = f.toImage();
@@ -2070,32 +2104,63 @@ void ScreenCanvas::startVideoPreviewProbe(const QString& localFilePath) {
         m_dragPreviewGotFrame = true;
         QPixmap newPm = QPixmap::fromImage(img);
         if (newPm.isNull()) return;
-        QPointF centerScene;
-        if (m_dragPreviewItem) {
-            const QSize oldSz = m_dragPreviewBaseSize.isValid() ? m_dragPreviewBaseSize : newPm.size();
-            const double w = oldSz.width() * m_scaleFactor;
-            const double h = oldSz.height() * m_scaleFactor;
-            QPointF topLeft = m_dragPreviewItem->pos();
-            centerScene = QPointF(topLeft.x() + w/2.0, topLeft.y() + h/2.0);
-        }
         m_dragPreviewPixmap = newPm;
         m_dragPreviewBaseSize = newPm.size();
-        if (auto* pmItem = qgraphicsitem_cast<QGraphicsPixmapItem*>(m_dragPreviewItem)) {
+        if (!m_dragPreviewItem) {
+            auto* pmItem = new QGraphicsPixmapItem(m_dragPreviewPixmap);
+            pmItem->setOpacity(0.0);
+            pmItem->setZValue(5000.0);
+            pmItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, false);
+            pmItem->setScale(m_scaleFactor);
+            m_scene->addItem(pmItem);
+            m_dragPreviewItem = pmItem;
+            updateDragPreviewPos(m_dragPreviewLastScenePos);
+            startDragPreviewFadeIn();
+        } else if (auto* pmItem = qgraphicsitem_cast<QGraphicsPixmapItem*>(m_dragPreviewItem)) {
             pmItem->setPixmap(m_dragPreviewPixmap);
+            updateDragPreviewPos(m_dragPreviewLastScenePos);
         }
-        if (m_dragPreviewItem && centerScene != QPointF()) {
-            const double nw = m_dragPreviewBaseSize.width() * m_scaleFactor;
-            const double nh = m_dragPreviewBaseSize.height() * m_scaleFactor;
-            m_dragPreviewItem->setPos(centerScene.x() - nw/2.0, centerScene.y() - nh/2.0);
-        }
-        // Pause immediately; we only needed the first frame
         if (m_dragPreviewPlayer) m_dragPreviewPlayer->pause();
+        if (m_dragPreviewFallbackTimer) { m_dragPreviewFallbackTimer->stop(); m_dragPreviewFallbackTimer->deleteLater(); m_dragPreviewFallbackTimer = nullptr; }
     });
-    // Start playback to decode a frame
     m_dragPreviewPlayer->play();
 }
 
+void ScreenCanvas::onFastVideoThumbnailReady(const QImage& img) {
+    if (img.isNull()) return;
+    if (m_dragPreviewGotFrame) return; // already satisfied by fallback
+    m_dragPreviewGotFrame = true;
+    QPixmap pm = QPixmap::fromImage(img);
+    if (pm.isNull()) return;
+    m_dragPreviewPixmap = pm;
+    m_dragPreviewBaseSize = pm.size();
+    if (!m_dragPreviewItem) {
+        auto* pmItem = new QGraphicsPixmapItem(m_dragPreviewPixmap);
+        pmItem->setOpacity(0.0);
+        pmItem->setZValue(5000.0);
+        pmItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, false);
+        pmItem->setScale(m_scaleFactor);
+        if (m_scene) m_scene->addItem(pmItem);
+        m_dragPreviewItem = pmItem;
+        updateDragPreviewPos(m_dragPreviewLastScenePos);
+        startDragPreviewFadeIn();
+    } else if (auto* pix = qgraphicsitem_cast<QGraphicsPixmapItem*>(m_dragPreviewItem)) {
+        pix->setPixmap(m_dragPreviewPixmap);
+        updateDragPreviewPos(m_dragPreviewLastScenePos);
+    }
+    if (m_dragPreviewFallbackTimer) { m_dragPreviewFallbackTimer->stop(); m_dragPreviewFallbackTimer->deleteLater(); m_dragPreviewFallbackTimer = nullptr; }
+    // If decoder path started, stop it
+    if (m_dragPreviewPlayer) { m_dragPreviewPlayer->stop(); m_dragPreviewPlayer->deleteLater(); m_dragPreviewPlayer = nullptr; }
+    if (m_dragPreviewSink) { m_dragPreviewSink->deleteLater(); m_dragPreviewSink = nullptr; }
+    if (m_dragPreviewAudio) { m_dragPreviewAudio->deleteLater(); m_dragPreviewAudio = nullptr; }
+}
+
 void ScreenCanvas::stopVideoPreviewProbe() {
+    if (m_dragPreviewFallbackTimer) {
+        m_dragPreviewFallbackTimer->stop();
+        m_dragPreviewFallbackTimer->deleteLater();
+        m_dragPreviewFallbackTimer = nullptr;
+    }
     if (m_dragPreviewPlayer) {
         m_dragPreviewPlayer->stop();
         m_dragPreviewPlayer->deleteLater();
@@ -2108,6 +2173,34 @@ void ScreenCanvas::stopVideoPreviewProbe() {
     if (m_dragPreviewAudio) {
         m_dragPreviewAudio->deleteLater();
         m_dragPreviewAudio = nullptr;
+    }
+}
+
+void ScreenCanvas::startDragPreviewFadeIn() {
+    // Stop any existing animation first
+    stopDragPreviewFade();
+    if (!m_dragPreviewItem) return;
+    const qreal target = m_dragPreviewTargetOpacity;
+    if (m_dragPreviewItem->opacity() >= target - 0.001) return;
+    auto* anim = new QVariantAnimation(this);
+    m_dragPreviewFadeAnim = anim;
+    anim->setStartValue(0.0);
+    anim->setEndValue(target);
+    anim->setDuration(m_dragPreviewFadeMs);
+    anim->setEasingCurve(QEasingCurve::OutCubic);
+    connect(anim, &QVariantAnimation::valueChanged, this, [this](const QVariant& v){
+        if (m_dragPreviewItem) m_dragPreviewItem->setOpacity(v.toReal());
+    });
+    connect(anim, &QVariantAnimation::finished, this, [this](){
+        m_dragPreviewFadeAnim = nullptr;
+    });
+    anim->start(QAbstractAnimation::DeleteWhenStopped);
+}
+
+void ScreenCanvas::stopDragPreviewFade() {
+    if (m_dragPreviewFadeAnim) {
+        m_dragPreviewFadeAnim->stop();
+        m_dragPreviewFadeAnim = nullptr;
     }
 }
 

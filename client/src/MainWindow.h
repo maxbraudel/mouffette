@@ -56,6 +56,8 @@ public:
     void setScreens(const QList<ScreenInfo>& screens);
     void clearScreens();
     void recenterWithMargin(int marginPx = 33);
+    // Configure fade-in duration (ms) for drag preview appearance
+    void setDragPreviewFadeDurationMs(int ms) { m_dragPreviewFadeMs = qMax(0, ms); }
     // Remote cursor visualization
     void updateRemoteCursor(int globalX, int globalY);
     void hideRemoteCursor();
@@ -115,17 +117,27 @@ private:
     bool m_dragPreviewIsVideo = false;
     QPixmap m_dragPreviewPixmap; // for images or rendered video placeholder
     bool m_dragCursorHidden = false; // hide cursor while dragging over canvas
+    QPointF m_dragPreviewLastScenePos; // last known scene position for preview center
+    // Fade-in for drag preview
+    int m_dragPreviewFadeMs = 180; // configurable duration in milliseconds
+    class QVariantAnimation* m_dragPreviewFadeAnim = nullptr; // forward-declared type
+    qreal m_dragPreviewTargetOpacity = 0.85; // final opacity during drag
     // Live video thumbnail probe
     QMediaPlayer* m_dragPreviewPlayer = nullptr;
     QVideoSink* m_dragPreviewSink = nullptr;
     QAudioOutput* m_dragPreviewAudio = nullptr;
     bool m_dragPreviewGotFrame = false;
+    QTimer* m_dragPreviewFallbackTimer = nullptr; // fallback to QMediaPlayer if fast thumbnail is slow
     void ensureDragPreview(const QMimeData* mime);
     void updateDragPreviewPos(const QPointF& scenePos);
     void clearDragPreview();
     QPixmap makeVideoPlaceholderPixmap(const QSize& pxSize);
     void startVideoPreviewProbe(const QString& localFilePath);
+    void startVideoPreviewProbeFallback(const QString& localFilePath);
     void stopVideoPreviewProbe();
+    void startDragPreviewFadeIn();
+    void stopDragPreviewFade();
+    void onFastVideoThumbnailReady(const QImage& img);
     
     void createScreenItems();
     QGraphicsRectItem* createScreenItem(const ScreenInfo& screen, int index, const QRectF& position);
