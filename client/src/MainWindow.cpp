@@ -33,6 +33,7 @@
 #include <QGraphicsTextItem>
 #include <QGraphicsRectItem>
 #include <QGraphicsPathItem>
+#include <QPainterPathStroker>
 #include <QFileInfo>
 #include <QGraphicsItem>
 #include <QSet>
@@ -1047,35 +1048,50 @@ private:
             QTransform t; t.translate(delta.x(), delta.y());
             m_stopIcon->setPath(t.map(path));
         }
-        // Repeat icon: two arrows forming a loop
+        // Repeat icon: classic circular loop arrow
         if (m_repeatIcon) {
             qreal w = repeatWpx, h = rowH;
-            qreal lx = w * 0.2;
-            qreal rx = w * 0.8;
-            qreal topY = h * 0.35;
-            qreal botY = h * 0.65;
+            qreal cx = w * 0.5;
+            qreal cy = h * 0.5;
+            qreal r = std::min(w, h) * 0.33;
             qreal thick = std::max<qreal>(1.0, h * 0.12);
-            qreal head = w * 0.16;
-            QPainterPath path;
-            // Top bar (left -> right)
-            path.addRect(QRectF(lx, topY - thick/2.0, (rx - head) - lx, thick));
-            // Top arrow head (pointing right)
-            QPolygonF headTop; headTop << QPointF(rx, topY)
-                                       << QPointF(rx - head, topY - thick*0.9)
-                                       << QPointF(rx - head, topY + thick*0.9);
-            path.addPolygon(headTop);
-            // Right connector (down)
-            path.addRect(QRectF(rx - thick/2.0, topY, thick, botY - topY));
-            // Bottom bar (right -> left)
-            path.addRect(QRectF(lx + head, botY - thick/2.0, rx - (lx + head), thick));
-            // Bottom arrow head (pointing left)
-            QPolygonF headBot; headBot << QPointF(lx, botY)
-                                       << QPointF(lx + head, botY - thick*0.9)
-                                       << QPointF(lx + head, botY + thick*0.9);
-            path.addPolygon(headBot);
-            // Left connector (up)
-            path.addRect(QRectF(lx - thick/2.0, topY, thick, botY - topY));
-            // Center within the square
+            qreal startDeg = 30.0;   // start angle (deg)
+            qreal spanDeg  = 300.0;  // sweep almost full circle
+            qreal endDeg   = startDeg + spanDeg;
+            QRectF circleRect(cx - r, cy - r, 2*r, 2*r);
+            // Thin arc path
+            QPainterPath arc;
+            arc.arcMoveTo(circleRect, startDeg);
+            arc.arcTo(circleRect, startDeg, spanDeg);
+            // Thicken arc to a filled ring segment
+            QPainterPathStroker stroker;
+            stroker.setWidth(thick);
+            stroker.setJoinStyle(Qt::RoundJoin);
+            stroker.setCapStyle(Qt::FlatCap);
+            QPainterPath ring = stroker.createStroke(arc);
+            // Arrow head at the end of arc; align to tangent and place at outer edge
+            const qreal PI = 3.14159265358979323846;
+            qreal rad = endDeg * PI / 180.0;
+            // Tangent for increasing angle (counterclockwise): (-sin, cos)
+            QPointF dir(-std::sin(rad), std::cos(rad));
+            qreal len = std::hypot(dir.x(), dir.y()); if (len > 0) dir /= len;
+            // Rotate arrowhead 45° to the left (CCW) relative to the previous right-rotated direction
+            const qreal a = -45.0 * (3.14159265358979323846 / 180.0); // -45° (clockwise) from tangent → visually left from prior state
+            qreal ca = std::cos(a), sa = std::sin(a);
+            QPointF dirHead(dir.x()*ca - dir.y()*sa, dir.x()*sa + dir.y()*ca);
+            len = std::hypot(dirHead.x(), dirHead.y()); if (len > 0) dirHead /= len;
+            QPointF perpHead(-dirHead.y(), dirHead.x());
+            QPointF radial(std::cos(rad), std::sin(rad));
+            QPointF tip(cx + (r + thick * 0.5) * radial.x(), cy + (r + thick * 0.5) * radial.y());
+            // Double the arrowhead size
+            qreal headLen = std::max(thick * 2.4, r * 0.70);
+            qreal headWide = thick * 1.8;
+            QPointF base = tip - dirHead * headLen;
+            QPolygonF headPoly;
+            headPoly << tip << (base + perpHead * headWide) << (base - perpHead * headWide);
+            QPainterPath path = ring;
+            path.addPolygon(headPoly);
+            // Center path within square
             QRectF bb = path.boundingRect();
             QPointF delta((w - bb.width())/2.0 - bb.left(), (h - bb.height())/2.0 - bb.top());
             QTransform t; t.translate(delta.x(), delta.y());
