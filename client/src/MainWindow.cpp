@@ -1097,7 +1097,6 @@ protected:
                 // Clamp and update both the player and local UI state for immediate feedback
                 r = std::clamp<qreal>(r, 0.0, 1.0);
                 seekToRatio(r);
-                if (m_durationMs > 0) m_positionMs = static_cast<qint64>(r * m_durationMs);
                 updateControlsLayout();
                 update();
                 event->accept();
@@ -2141,10 +2140,9 @@ void ScreenCanvas::mousePressEvent(QMouseEvent* event) {
         QGraphicsItem* rawHit = nullptr;
         for (QGraphicsItem* it : hitItems) { if ((mediaHit = toMedia(it))) { rawHit = it; break; } }
         if (mediaHit) {
-            // If a media (or its overlay) is hit, ensure it remains selected and allow direct control interactions
-            if (!mediaHit->isSelected()) {
-                mediaHit->setSelected(true);
-            }
+            // For simple UX: modifiers do nothing; always single-select the clicked media
+            if (m_scene) m_scene->clearSelection();
+            if (!mediaHit->isSelected()) mediaHit->setSelected(true);
             // Map click to item pos and let video handle controls
             if (auto* v = dynamic_cast<ResizableVideoItem*>(mediaHit)) {
                 const QPointF itemPos = v->mapFromScene(mapToScene(event->pos()));
@@ -2153,8 +2151,13 @@ void ScreenCanvas::mousePressEvent(QMouseEvent* event) {
                     return;
                 }
             }
-            // Otherwise, let default behavior run (move/select media), but do not clear selection
-            QGraphicsView::mousePressEvent(event);
+            // Let default behavior run (for move/drag, etc.), but ignore modifiers
+            QMouseEvent synthetic(event->type(), event->position(), event->scenePosition(), event->globalPosition(),
+                                  event->button(), event->buttons(), Qt::NoModifier);
+            QGraphicsView::mousePressEvent(&synthetic);
+            // Enforce single selection after default handling
+            if (m_scene) m_scene->clearSelection();
+            mediaHit->setSelected(true);
             return;
         }
 
@@ -2192,13 +2195,16 @@ void ScreenCanvas::mouseDoubleClickEvent(QMouseEvent* event) {
         ResizableMediaBase* mediaHit = nullptr;
         for (QGraphicsItem* it : hitItems) { if ((mediaHit = toMedia(it))) break; }
         if (mediaHit) {
+            if (scene()) scene()->clearSelection();
             if (!mediaHit->isSelected()) mediaHit->setSelected(true);
             if (auto* v = dynamic_cast<ResizableVideoItem*>(mediaHit)) {
                 const QPointF itemPos = v->mapFromScene(scenePos);
                 if (v->handleControlsPressAtItemPos(itemPos)) { event->accept(); return; }
             }
-            // Let default double-click behavior (e.g., edit?) proceed without clearing selection
             QGraphicsView::mouseDoubleClickEvent(event);
+            // Enforce single selection again
+            if (scene()) scene()->clearSelection();
+            mediaHit->setSelected(true);
             return;
         }
         // If no media hit, pass through
@@ -2302,6 +2308,30 @@ void ScreenCanvas::mouseReleaseEvent(QMouseEvent* event) {
             // Reset cursor after resize
             viewport()->unsetCursor();
         }
+        // Route to base with modifiers stripped to avoid Qt toggling selection on Ctrl/Cmd
+        QMouseEvent synthetic(event->type(), event->position(), event->scenePosition(), event->globalPosition(),
+                              event->button(), event->buttons(), Qt::NoModifier);
+        QGraphicsView::mouseReleaseEvent(&synthetic);
+        // Enforce single-select policy regardless of modifiers once the click finishes
+        if (m_scene) {
+            const QList<QGraphicsItem*> sel = m_scene->selectedItems();
+            if (!sel.isEmpty()) {
+                // Keep the topmost media item under cursor if possible; otherwise keep the first selected
+                const QList<QGraphicsItem*> hitItems = items(event->pos());
+                auto toMedia = [](QGraphicsItem* x)->ResizableMediaBase* {
+                    while (x) { if (auto* m = dynamic_cast<ResizableMediaBase*>(x)) return m; x = x->parentItem(); }
+                    return nullptr;
+                };
+                ResizableMediaBase* keep = nullptr;
+                for (QGraphicsItem* it : hitItems) { if ((keep = toMedia(it))) break; }
+                if (!keep) {
+                    for (QGraphicsItem* it : sel) { if ((keep = dynamic_cast<ResizableMediaBase*>(it))) break; }
+                }
+                m_scene->clearSelection();
+                if (keep) keep->setSelected(true);
+            }
+        }
+        return;
     }
     QGraphicsView::mouseReleaseEvent(event);
 }
