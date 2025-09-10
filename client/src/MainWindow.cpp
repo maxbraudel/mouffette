@@ -554,17 +554,20 @@ public:
         m_player->setSource(QUrl::fromLocalFile(filePath));
     // Size adoption will be handled from frames and metadata; no direct videoSizeChanged hookup to keep Qt compatibility
         QObject::connect(m_sink, &QVideoSink::videoFrameChanged, [this](const QVideoFrame& f){
-            m_lastFrame = f;
-            maybeAdoptFrameSize(f);
-            // If we primed playback to grab the first frame, pause immediately and restore audio state
-            if (m_primingFirstFrame && !m_firstFramePrimed && f.isValid()) {
-                m_firstFramePrimed = true;
-                m_primingFirstFrame = false;
-                if (m_player) {
-                    m_player->pause();
-                    m_player->setPosition(0);
+            // Only replace the cached frame when valid and not holding the last frame at end-of-media
+            if (!m_holdLastFrameAtEnd && f.isValid()) {
+                m_lastFrame = f;
+                maybeAdoptFrameSize(f);
+                // If we primed playback to grab the first frame, pause immediately and restore audio state
+                if (m_primingFirstFrame && !m_firstFramePrimed) {
+                    m_firstFramePrimed = true;
+                    m_primingFirstFrame = false;
+                    if (m_player) {
+                        m_player->pause();
+                        m_player->setPosition(0);
+                    }
+                    if (m_audio) m_audio->setMuted(m_savedMuted);
                 }
-                if (m_audio) m_audio->setMuted(m_savedMuted);
             }
             this->update();
         });
@@ -600,6 +603,7 @@ public:
                     }
                 }
                 if (!m_firstFramePrimed && !m_primingFirstFrame) {
+                    m_holdLastFrameAtEnd = false; // new load, don't hold
                     m_savedMuted = m_audio ? m_audio->isMuted() : false;
                     if (m_audio) m_audio->setMuted(true);
                     m_primingFirstFrame = true;
@@ -610,11 +614,21 @@ public:
                 if (m_repeatEnabled) {
                     m_player->setPosition(0);
                     m_player->play();
+                } else {
+                    // Keep showing the last frame and pin progress to 100%
+                    m_holdLastFrameAtEnd = true;
+                    if (m_player) m_player->pause();
+                    if (m_durationMs > 0) m_positionMs = m_durationMs;
+                    updateControlsLayout();
+                    update();
                 }
             }
         });
     QObject::connect(m_player, &QMediaPlayer::durationChanged, [this](qint64 d){ m_durationMs = d; this->update(); });
-    QObject::connect(m_player, &QMediaPlayer::positionChanged, [this](qint64 p){ m_positionMs = p; this->update(); });
+    QObject::connect(m_player, &QMediaPlayer::positionChanged, [this](qint64 p){
+        if (m_holdLastFrameAtEnd) return; // keep progress pinned at end until user action
+        m_positionMs = p; this->update();
+    });
 
     // Controls overlays (ignore transforms so they stay in absolute pixels)
     m_controlsBg = new QGraphicsRectItem(this);
@@ -741,12 +755,17 @@ public:
     }
     void togglePlayPause() {
         if (!m_player) return;
+    m_holdLastFrameAtEnd = false;
         if (m_player->playbackState() == QMediaPlayer::PlayingState) m_player->pause(); else m_player->play();
     }
     void stopToBeginning() {
         if (!m_player) return;
+    m_holdLastFrameAtEnd = false;
         m_player->pause();
         m_player->setPosition(0);
+    m_positionMs = 0;
+    updateControlsLayout();
+    update();
     }
     void toggleRepeat() {
     m_repeatEnabled = !m_repeatEnabled;
@@ -764,7 +783,12 @@ public:
     void seekToRatio(qreal r) {
         if (!m_player || m_durationMs <= 0) return;
         r = std::clamp<qreal>(r, 0.0, 1.0);
-        m_player->setPosition(static_cast<qint64>(r * m_durationMs));
+    m_holdLastFrameAtEnd = false;
+    qint64 pos = static_cast<qint64>(r * m_durationMs);
+    m_player->setPosition(pos);
+    m_positionMs = pos;
+    updateControlsLayout();
+    update();
     }
     void setInitialScaleFactor(qreal f) { m_initialScaleFactor = f; }
     // Drag helpers for view-level coordination
@@ -775,6 +799,7 @@ public:
         if (m_draggingProgress) {
             qreal r = (p.x() - m_progRectItemCoords.left()) / m_progRectItemCoords.width();
             r = std::clamp<qreal>(r, 0.0, 1.0);
+            m_holdLastFrameAtEnd = false;
             seekToRatio(r);
             if (m_durationMs > 0) m_positionMs = static_cast<qint64>(r * m_durationMs);
             updateControlsLayout();
@@ -800,9 +825,9 @@ public:
     bool handleControlsPressAtItemPos(const QPointF& itemPos) {
         if (!isSelected()) return false;
         // Play button
-        if (m_playBtnRectItemCoords.contains(itemPos)) { togglePlayPause(); return true; }
+    if (m_playBtnRectItemCoords.contains(itemPos)) { m_holdLastFrameAtEnd = false; togglePlayPause(); return true; }
         // Stop
-        if (m_stopBtnRectItemCoords.contains(itemPos)) { stopToBeginning(); return true; }
+    if (m_stopBtnRectItemCoords.contains(itemPos)) { m_holdLastFrameAtEnd = false; stopToBeginning(); return true; }
         // Repeat
         if (m_repeatBtnRectItemCoords.contains(itemPos)) { toggleRepeat(); return true; }
         // Mute
@@ -810,6 +835,7 @@ public:
         // Progress bar
         if (m_progRectItemCoords.contains(itemPos)) {
             qreal r = (itemPos.x() - m_progRectItemCoords.left()) / m_progRectItemCoords.width();
+            m_holdLastFrameAtEnd = false;
             seekToRatio(r);
             // Begin drag-to-seek
             m_draggingProgress = true;
@@ -835,7 +861,12 @@ public:
         QRectF br(0,0, baseWidth(), baseHeight());
         if (m_lastFrame.isValid()) {
             QImage img = m_lastFrame.toImage();
-            if (!img.isNull()) painter->drawImage(br, img);
+            if (!img.isNull()) {
+                painter->drawImage(br, img);
+            } else if (m_posterImageSet && !m_posterImage.isNull()) {
+                // Fallback if conversion failed for some reason
+                painter->drawImage(br, m_posterImage);
+            }
         } else if (m_posterImageSet && !m_posterImage.isNull()) {
             painter->drawImage(br, m_posterImage);
         }
@@ -1340,6 +1371,8 @@ private:
     // Drag state for sliders
     bool m_draggingProgress = false;
     bool m_draggingVolume = false;
+    // Hold last frame after EndOfMedia until next user action
+    bool m_holdLastFrameAtEnd = false;
 };
 
 MainWindow::MainWindow(QWidget *parent)
