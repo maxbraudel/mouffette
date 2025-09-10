@@ -34,6 +34,8 @@
 #include <QGraphicsTextItem>
 #include <QGraphicsRectItem>
 #include <QGraphicsPathItem>
+#include <QtSvgWidgets/QGraphicsSvgItem>
+#include <QtSvg/QSvgRenderer>
 #include <QPainterPathStroker>
 #include <QFileInfo>
 #include <QGraphicsItem>
@@ -666,12 +668,15 @@ public:
     m_playBtnRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_playBtnRectItem->setAcceptedMouseButtons(Qt::NoButton);
 
-    m_playIcon = new QGraphicsPathItem(m_playBtnRectItem);
-    m_playIcon->setBrush(Qt::white);
-    m_playIcon->setPen(Qt::NoPen);
+    m_playIcon = new QGraphicsSvgItem(":/icons/icons/play.svg", m_playBtnRectItem);
     m_playIcon->setZValue(102.0);
     m_playIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_playIcon->setAcceptedMouseButtons(Qt::NoButton);
+    m_pauseIcon = new QGraphicsSvgItem(":/icons/icons/pause.svg", m_playBtnRectItem);
+    m_pauseIcon->setZValue(102.0);
+    m_pauseIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+    m_pauseIcon->setAcceptedMouseButtons(Qt::NoButton);
+    m_pauseIcon->setVisible(false);
 
     // Stop button (top row, square)
     m_stopBtnRectItem = new RoundedRectItem(m_controlsBg);
@@ -680,9 +685,7 @@ public:
     m_stopBtnRectItem->setZValue(101.0);
     m_stopBtnRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_stopBtnRectItem->setAcceptedMouseButtons(Qt::NoButton);
-    m_stopIcon = new QGraphicsPathItem(m_stopBtnRectItem);
-    m_stopIcon->setBrush(Qt::white);
-    m_stopIcon->setPen(Qt::NoPen);
+    m_stopIcon = new QGraphicsSvgItem(":/icons/icons/stop.svg", m_stopBtnRectItem);
     m_stopIcon->setZValue(102.0);
     m_stopIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_stopIcon->setAcceptedMouseButtons(Qt::NoButton);
@@ -694,9 +697,7 @@ public:
     m_repeatBtnRectItem->setZValue(101.0);
     m_repeatBtnRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_repeatBtnRectItem->setAcceptedMouseButtons(Qt::NoButton);
-    m_repeatIcon = new QGraphicsPathItem(m_repeatBtnRectItem);
-    m_repeatIcon->setBrush(Qt::white);
-    m_repeatIcon->setPen(Qt::NoPen);
+    m_repeatIcon = new QGraphicsSvgItem(":/icons/icons/loop.svg", m_repeatBtnRectItem);
     m_repeatIcon->setZValue(102.0);
     m_repeatIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_repeatIcon->setAcceptedMouseButtons(Qt::NoButton);
@@ -708,17 +709,13 @@ public:
     m_muteBtnRectItem->setZValue(101.0);
     m_muteBtnRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_muteBtnRectItem->setAcceptedMouseButtons(Qt::NoButton);
-    m_muteIcon = new QGraphicsPathItem(m_muteBtnRectItem);
-    m_muteIcon->setBrush(Qt::white);
-    m_muteIcon->setPen(Qt::NoPen);
+    m_muteIcon = new QGraphicsSvgItem(":/icons/icons/volume-on.svg", m_muteBtnRectItem);
     m_muteIcon->setZValue(102.0);
     m_muteIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_muteIcon->setAcceptedMouseButtons(Qt::NoButton);
-    // Slash overlay for muted state
-    m_muteSlashIcon = new QGraphicsPathItem(m_muteBtnRectItem);
-    m_muteSlashIcon->setBrush(Qt::NoBrush);
-    m_muteSlashIcon->setPen(QPen(Qt::white, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    m_muteSlashIcon->setZValue(103.0);
+    // volume-off asset shown when muted
+    m_muteSlashIcon = new QGraphicsSvgItem(":/icons/icons/volume-off.svg", m_muteBtnRectItem);
+    m_muteSlashIcon->setZValue(102.0);
     m_muteSlashIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_muteSlashIcon->setAcceptedMouseButtons(Qt::NoButton);
 
@@ -772,6 +769,7 @@ public:
     if (m_controlsBg) m_controlsBg->setVisible(false);
     if (m_playBtnRectItem) m_playBtnRectItem->setVisible(false);
     if (m_playIcon) m_playIcon->setVisible(false);
+    if (m_pauseIcon) m_pauseIcon->setVisible(false);
     if (m_stopBtnRectItem) m_stopBtnRectItem->setVisible(false);
     if (m_stopIcon) m_stopIcon->setVisible(false);
     if (m_repeatBtnRectItem) m_repeatBtnRectItem->setVisible(false);
@@ -941,6 +939,7 @@ public:
         } else if (m_posterImageSet && !m_posterImage.isNull()) {
             painter->drawImage(br, m_posterImage);
         }
+    // Pause icon visibility is controlled in updateControlsLayout and setControlsVisible
         // Update floating controls overlay (only relevant when selected)
     if (isSelected()) updateControlsLayout();
         // Selection/handles and label
@@ -1156,8 +1155,9 @@ private:
     }
     void setControlsVisible(bool show) {
         if (m_controlsBg) m_controlsBg->setVisible(show);
-        if (m_playBtnRectItem) m_playBtnRectItem->setVisible(show);
-        if (m_playIcon) m_playIcon->setVisible(show);
+    if (m_playBtnRectItem) m_playBtnRectItem->setVisible(show);
+    if (m_playIcon) m_playIcon->setVisible(show && !(m_player && m_player->playbackState() == QMediaPlayer::PlayingState));
+    if (m_pauseIcon) m_pauseIcon->setVisible(show &&  (m_player && m_player->playbackState() == QMediaPlayer::PlayingState));
     if (m_stopBtnRectItem) m_stopBtnRectItem->setVisible(show);
     if (m_stopIcon) m_stopIcon->setVisible(show);
     if (m_repeatBtnRectItem) m_repeatBtnRectItem->setVisible(show);
@@ -1272,130 +1272,39 @@ private:
             m_progressFillRectItem->setRect(margin, margin, (progWpx - 2*margin) * ratio, rowH - 2*margin);
         }
     }
-    // Update icon shapes and center them in their squares
-        if (m_playIcon) {
-            bool isPlaying = (m_player && m_player->playbackState() == QMediaPlayer::PlayingState);
-            // If we've reached end (holding last frame) or effectively at end without repeat, show Play immediately
-            if (m_holdLastFrameAtEnd) isPlaying = false;
-            if (!m_repeatEnabled && m_durationMs > 0 && (m_positionMs + 30 >= m_durationMs)) isPlaying = false; // epsilon
-            if (isPlaying) {
-                // Pause icon: two bars
-                qreal w = playWpx;
-                qreal h = rowH;
-                qreal barW = w * 0.25; qreal gap = w * 0.15;
-                QRectF leftBar(0, 0, barW, h*0.6);
-                leftBar.moveTopLeft(QPointF(0, h*0.2));
-                QRectF rightBar(leftBar.adjusted(barW + gap, 0, barW + gap, 0));
-                QPainterPath path;
-                path.addRect(leftBar);
-                path.addRect(rightBar);
-                // Center the path within the play button square
-                QRectF bb = path.boundingRect();
-                QPointF delta((w - bb.width())/2.0 - bb.left(), (h - bb.height())/2.0 - bb.top());
-                QTransform t; t.translate(delta.x(), delta.y());
-                m_playIcon->setPath(t.map(path));
-            } else {
-                // Play icon: triangle
-                qreal w = playWpx;
-                qreal h = rowH;
-                QPolygonF poly;
-                poly << QPointF(0, h*0.2)
-                     << QPointF(0, h*0.8)
-                     << QPointF(w*0.6, h*0.5);
-                QPainterPath path; path.addPolygon(poly); path.closeSubpath();
-                // Center the path within the play button square
-                QRectF bb = path.boundingRect();
-                QPointF delta((w - bb.width())/2.0 - bb.left(), (h - bb.height())/2.0 - bb.top());
-                QTransform t; t.translate(delta.x(), delta.y());
-                m_playIcon->setPath(t.map(path));
-            }
+    // Update SVG icon placement, toggle variants
+        auto placeSvg = [](QGraphicsSvgItem* svg, qreal targetW, qreal targetH) {
+            if (!svg) return;
+            QSizeF nat = svg->renderer() ? svg->renderer()->defaultSize() : QSizeF(24,24);
+            if (nat.width() <= 0 || nat.height() <= 0) nat = svg->boundingRect().size();
+            if (nat.width() <= 0 || nat.height() <= 0) nat = QSizeF(24,24);
+            const qreal scale = std::min(targetW / nat.width(), targetH / nat.height()) * 0.6; // 60% of button area
+            svg->setScale(scale);
+            const qreal x = (targetW - nat.width()*scale) / 2.0;
+            const qreal y = (targetH - nat.height()*scale) / 2.0;
+            svg->setPos(x, y);
+        };
+        // Play/pause toggle
+        bool isPlaying = (m_player && m_player->playbackState() == QMediaPlayer::PlayingState);
+        if (m_holdLastFrameAtEnd) isPlaying = false;
+        if (!m_repeatEnabled && m_durationMs > 0 && (m_positionMs + 30 >= m_durationMs)) isPlaying = false;
+        if (m_playIcon && m_pauseIcon) {
+            m_playIcon->setVisible(!isPlaying);
+            m_pauseIcon->setVisible(isPlaying);
+            placeSvg(m_playIcon, playWpx, rowH);
+            placeSvg(m_pauseIcon, playWpx, rowH);
         }
-        // Stop icon: square
-        if (m_stopIcon) {
-            qreal w = stopWpx, h = rowH;
-            QRectF sq(0, 0, w*0.5, h*0.5);
-            QPainterPath path; path.addRect(sq);
-            QRectF bb = path.boundingRect();
-            QPointF delta((w - bb.width())/2.0 - bb.left(), (h - bb.height())/2.0 - bb.top());
-            QTransform t; t.translate(delta.x(), delta.y());
-            m_stopIcon->setPath(t.map(path));
-        }
-        // Repeat icon: classic circular loop arrow
-        if (m_repeatIcon) {
-            qreal w = repeatWpx, h = rowH;
-            qreal cx = w * 0.5;
-            qreal cy = h * 0.5;
-            qreal r = std::min(w, h) * 0.33;
-            qreal thick = std::max<qreal>(1.0, h * 0.12);
-            qreal startDeg = 30.0;   // start angle (deg)
-            qreal spanDeg  = 300.0;  // sweep almost full circle
-            qreal trimDeg  = -8.0;    // trim to avoid overshoot under the arrowhead
-            qreal effSpan  = spanDeg - trimDeg;
-            qreal endDeg   = startDeg + effSpan;
-            QRectF circleRect(cx - r, cy - r, 2*r, 2*r);
-            // Thin arc path
-            QPainterPath arc;
-            arc.arcMoveTo(circleRect, startDeg);
-            arc.arcTo(circleRect, startDeg, effSpan);
-            // Thicken arc to a filled ring segment
-            QPainterPathStroker stroker;
-            stroker.setWidth(thick);
-            stroker.setJoinStyle(Qt::RoundJoin);
-            stroker.setCapStyle(Qt::FlatCap);
-            QPainterPath ring = stroker.createStroke(arc);
-            // Arrow head at the end of arc; align to tangent and place at outer edge
-            const qreal PI = 3.14159265358979323846;
-            qreal rad = endDeg * PI / 180.0;
-            // Tangent for increasing angle (counterclockwise): (-sin, cos)
-            QPointF dir(-std::sin(rad), std::cos(rad));
-            qreal len = std::hypot(dir.x(), dir.y()); if (len > 0) dir /= len;
-            // Rotate arrowhead 45° to the left (CCW) relative to the previous right-rotated direction
-            const qreal a = -45.0 * (3.14159265358979323846 / 180.0); // -45° (clockwise) from tangent → visually left from prior state
-            qreal ca = std::cos(a), sa = std::sin(a);
-            QPointF dirHead(dir.x()*ca - dir.y()*sa, dir.x()*sa + dir.y()*ca);
-            len = std::hypot(dirHead.x(), dirHead.y()); if (len > 0) dirHead /= len;
-            QPointF perpHead(-dirHead.y(), dirHead.x());
-            QPointF radial(std::cos(rad), std::sin(rad));
-            QPointF tip(cx + (r + thick * 0.5) * radial.x(), cy + (r + thick * 0.5) * radial.y());
-            // Double the arrowhead size
-            qreal headLen = std::max(thick * 2.4, r * 0.70);
-            qreal headWide = thick * 1.8;
-            QPointF base = tip - dirHead * headLen;
-            QPolygonF headPoly;
-            headPoly << tip << (base + perpHead * headWide) << (base - perpHead * headWide);
-            QPainterPath path = ring;
-            path.addPolygon(headPoly);
-            // Center path within square
-            QRectF bb = path.boundingRect();
-            QPointF delta((w - bb.width())/2.0 - bb.left(), (h - bb.height())/2.0 - bb.top());
-            QTransform t; t.translate(delta.x(), delta.y());
-            m_repeatIcon->setPath(t.map(path));
-        }
-        // Mute icon: speaker only; slash drawn as separate overlay when muted
-        if (m_muteIcon) {
-            qreal w = muteWpx, h = rowH;
-            QPainterPath path;
-            QRectF box(w*0.2, h*0.35, w*0.2, h*0.3);
-            path.addRect(box);
-            QPolygonF horn; horn << QPointF(box.right(), box.top()) << QPointF(w*0.6, h*0.2) << QPointF(w*0.6, h*0.8) << QPointF(box.right(), box.bottom());
-            path.addPolygon(horn);
-            QRectF bb = path.boundingRect();
-            QPointF delta((w - bb.width())/2.0 - bb.left(), (h - bb.height())/2.0 - bb.top());
-            QTransform t; t.translate(delta.x(), delta.y());
-            m_muteIcon->setPath(t.map(path));
-        }
-        // Update mute slash overlay path and visibility
-        if (m_muteSlashIcon) {
-            qreal w = muteWpx, h = rowH;
-            QPainterPath slash;
-            slash.moveTo(w*0.2, h*0.2);
-            slash.lineTo(w*0.8, h*0.8);
-            // center to button square using same translation as icon
-            QRectF bb = slash.boundingRect();
-            QPointF delta((w - bb.width())/2.0 - bb.left(), (h - bb.height())/2.0 - bb.top());
-            QTransform t; t.translate(delta.x(), delta.y());
-            m_muteSlashIcon->setPath(t.map(slash));
-            m_muteSlashIcon->setVisible(m_audio && m_audio->isMuted());
+        // Stop icon
+        placeSvg(m_stopIcon, stopWpx, rowH);
+        // Repeat icon (keep small visual)
+        placeSvg(m_repeatIcon, repeatWpx, rowH);
+        // Volume icons (toggle on mute)
+        bool muted = m_audio && m_audio->isMuted();
+        if (m_muteIcon && m_muteSlashIcon) {
+            m_muteIcon->setVisible(!muted);
+            m_muteSlashIcon->setVisible(muted);
+            placeSvg(m_muteIcon, muteWpx, rowH);
+            placeSvg(m_muteSlashIcon, muteWpx, rowH);
         }
         // Store item-space rects for hit testing on the parent
         // Map viewport-space rectangles back to item coords
@@ -1436,14 +1345,15 @@ private:
     // Floating controls (absolute px)
     QGraphicsRectItem* m_controlsBg = nullptr;
     RoundedRectItem* m_playBtnRectItem = nullptr;
-    QGraphicsPathItem* m_playIcon = nullptr; // path supports both triangle and bars
+    QGraphicsSvgItem* m_playIcon = nullptr; // play triangle
+    QGraphicsSvgItem* m_pauseIcon = nullptr; // pause bars
     RoundedRectItem* m_stopBtnRectItem = nullptr;
-    QGraphicsPathItem* m_stopIcon = nullptr;
+    QGraphicsSvgItem* m_stopIcon = nullptr;
     RoundedRectItem* m_repeatBtnRectItem = nullptr;
-    QGraphicsPathItem* m_repeatIcon = nullptr;
+    QGraphicsSvgItem* m_repeatIcon = nullptr; // currently unused visual, keep for symmetry
     RoundedRectItem* m_muteBtnRectItem = nullptr;
-    QGraphicsPathItem* m_muteIcon = nullptr;
-    QGraphicsPathItem* m_muteSlashIcon = nullptr;
+    QGraphicsSvgItem* m_muteIcon = nullptr; // volume on
+    QGraphicsSvgItem* m_muteSlashIcon = nullptr; // volume off
     QGraphicsRectItem* m_volumeBgRectItem = nullptr;
     QGraphicsRectItem* m_volumeFillRectItem = nullptr;
     QGraphicsRectItem* m_progressBgRectItem = nullptr;
