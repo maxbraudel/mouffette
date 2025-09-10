@@ -39,6 +39,7 @@
 #include <QMediaPlayer>
 #include <QAudioOutput>
 #include <QVideoSink>
+#include <QMediaMetaData>
 #include <QVideoFrame>
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
@@ -504,10 +505,64 @@ public:
         m_player = new QMediaPlayer();
         m_audio = new QAudioOutput();
         m_sink = new QVideoSink();
-    m_player->setAudioOutput(m_audio);
-    m_player->setVideoSink(m_sink);
-    m_player->setSource(QUrl::fromLocalFile(filePath));
-    QObject::connect(m_sink, &QVideoSink::videoFrameChanged, [this](const QVideoFrame& f){ m_lastFrame = f; this->update(); });
+        m_player->setAudioOutput(m_audio);
+        m_player->setVideoSink(m_sink);
+        m_player->setSource(QUrl::fromLocalFile(filePath));
+    // Size adoption will be handled from frames and metadata; no direct videoSizeChanged hookup to keep Qt compatibility
+        QObject::connect(m_sink, &QVideoSink::videoFrameChanged, [this](const QVideoFrame& f){
+            m_lastFrame = f;
+            maybeAdoptFrameSize(f);
+            // If we primed playback to grab the first frame, pause immediately and restore audio state
+            if (m_primingFirstFrame && !m_firstFramePrimed && f.isValid()) {
+                m_firstFramePrimed = true;
+                m_primingFirstFrame = false;
+                if (m_player) {
+                    m_player->pause();
+                    m_player->setPosition(0);
+                }
+                if (m_audio) m_audio->setMuted(m_savedMuted);
+            }
+            this->update();
+        });
+        // On load, adopt size from metadata, try to fetch poster image, and prime first frame (without user action)
+        QObject::connect(m_player, &QMediaPlayer::mediaStatusChanged, [this](QMediaPlayer::MediaStatus s){
+            if (s == QMediaPlayer::LoadedMedia || s == QMediaPlayer::BufferedMedia) {
+                if (!m_adoptedSize) {
+                    const QMediaMetaData md = m_player->metaData();
+                    const QVariant v = md.value(QMediaMetaData::Resolution);
+                    const QSize sz = v.toSize();
+                    if (!sz.isEmpty()) adoptBaseSize(sz);
+                    // Try to use a poster/thumbnail image while waiting for the first frame
+                    const QVariant thumbVar = md.value(QMediaMetaData::ThumbnailImage);
+                    if (!m_posterImageSet && thumbVar.isValid()) {
+                        if (thumbVar.canConvert<QImage>()) {
+                            m_posterImage = thumbVar.value<QImage>();
+                            m_posterImageSet = !m_posterImage.isNull();
+                        } else if (thumbVar.canConvert<QPixmap>()) {
+                            m_posterImage = thumbVar.value<QPixmap>().toImage();
+                            m_posterImageSet = !m_posterImage.isNull();
+                        }
+                        if (!m_posterImageSet) {
+                            const QVariant coverVar = md.value(QMediaMetaData::CoverArtImage);
+                            if (coverVar.canConvert<QImage>()) {
+                                m_posterImage = coverVar.value<QImage>();
+                                m_posterImageSet = !m_posterImage.isNull();
+                            } else if (coverVar.canConvert<QPixmap>()) {
+                                m_posterImage = coverVar.value<QPixmap>().toImage();
+                                m_posterImageSet = !m_posterImage.isNull();
+                            }
+                        }
+                        if (m_posterImageSet) this->update();
+                    }
+                }
+                if (!m_firstFramePrimed && !m_primingFirstFrame) {
+                    m_savedMuted = m_audio ? m_audio->isMuted() : false;
+                    if (m_audio) m_audio->setMuted(true);
+                    m_primingFirstFrame = true;
+                    if (m_player) m_player->play();
+                }
+            }
+        });
     QObject::connect(m_player, &QMediaPlayer::durationChanged, [this](qint64 d){ m_durationMs = d; this->update(); });
     QObject::connect(m_player, &QMediaPlayer::positionChanged, [this](qint64 p){ m_positionMs = p; this->update(); });
 
@@ -571,6 +626,7 @@ public:
         r = std::clamp<qreal>(r, 0.0, 1.0);
         m_player->setPosition(static_cast<qint64>(r * m_durationMs));
     }
+    void setInitialScaleFactor(qreal f) { m_initialScaleFactor = f; }
     // Expose a helper for view-level control handling
     bool handleControlsPressAtItemPos(const QPointF& itemPos) {
         if (!isSelected()) return false;
@@ -586,13 +642,13 @@ public:
     }
     void paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget* widget) override {
         Q_UNUSED(option); Q_UNUSED(widget);
-        // Draw current frame (or placeholder)
+        // Draw current frame; otherwise if available, draw poster image; avoid black placeholder to prevent flicker
         QRectF br(0,0, baseWidth(), baseHeight());
         if (m_lastFrame.isValid()) {
             QImage img = m_lastFrame.toImage();
             if (!img.isNull()) painter->drawImage(br, img);
-        } else {
-            painter->fillRect(br, Qt::black);
+        } else if (m_posterImageSet && !m_posterImage.isNull()) {
+            painter->drawImage(br, m_posterImage);
         }
         // Update floating controls overlay (only relevant when selected)
         if (isSelected()) updateControlsLayout();
@@ -672,6 +728,30 @@ protected:
         return ResizableMediaBase::itemChange(change, value);
     }
 private:
+    void maybeAdoptFrameSize(const QVideoFrame& f) {
+        if (m_adoptedSize) return;
+        if (!f.isValid()) return;
+        QImage img = f.toImage();
+        if (img.isNull()) return;
+        const QSize sz = img.size();
+        if (sz.isEmpty()) return;
+        adoptBaseSize(sz);
+    }
+    void adoptBaseSize(const QSize& sz) {
+        if (m_adoptedSize) return;
+        if (sz.isEmpty()) return;
+        m_adoptedSize = true;
+        // Preserve center in scene while changing base size and scale
+        const QRectF oldRect(0,0, baseWidth(), baseHeight());
+        const QPointF oldCenterScene = mapToScene(oldRect.center());
+        prepareGeometryChange();
+    m_baseSize = sz;
+        setScale(m_initialScaleFactor);
+        const QPointF newTopLeftScene = oldCenterScene - QPointF(sz.width() * m_initialScaleFactor / 2.0,
+                                                                 sz.height() * m_initialScaleFactor / 2.0);
+        setPos(newTopLeftScene);
+        update();
+    }
     void setControlsVisible(bool show) {
         if (m_controlsBg) m_controlsBg->setVisible(show);
         if (m_playBtnRectItem) m_playBtnRectItem->setVisible(show);
@@ -758,12 +838,21 @@ private:
     QVideoFrame m_lastFrame;
     qint64 m_durationMs = 0;
     qint64 m_positionMs = 0;
+    // First-frame priming state
+    bool m_primingFirstFrame = false;
+    bool m_firstFramePrimed = false;
+    bool m_savedMuted = false;
+    // Optional poster image from metadata to avoid initial black frame
+    QImage m_posterImage;
+    bool m_posterImageSet = false;
     // Floating controls (absolute px)
     QGraphicsRectItem* m_controlsBg = nullptr;
     QGraphicsRectItem* m_playBtnRectItem = nullptr;
     QGraphicsPathItem* m_playIcon = nullptr; // path supports both triangle and bars
     QGraphicsRectItem* m_progressBgRectItem = nullptr;
     QGraphicsRectItem* m_progressFillRectItem = nullptr;
+    bool m_adoptedSize = false;
+    qreal m_initialScaleFactor = 1.0;
     // Cached item-space rects for hit-testing
     QRectF m_playBtnRectItemCoords;
     QRectF m_progRectItemCoords;
@@ -1225,13 +1314,14 @@ void ScreenCanvas::dropEvent(QDropEvent* event) {
         const QString ext = QFileInfo(droppedPath).suffix().toLower();
         static const QSet<QString> kVideoExts = {"mp4","mov","m4v","avi","mkv","webm"};
         if (kVideoExts.contains(ext)) {
-            // Start with a default logical size; we'll not decode immediately for dimensions
+            // Create with placeholder logical size; adopt real size on first frame
             auto* vitem = new ResizableVideoItem(droppedPath, m_mediaHandleVisualSizePx, m_mediaHandleSelectionSizePx, filename);
-            // set initial scale based on an assumed 640x360 mapping using scaleFactor
+            vitem->setInitialScaleFactor(m_scaleFactor);
+            // Start with a neutral 1.0 scale on placeholder size and center approx.
+            vitem->setScale(m_scaleFactor);
             const double w = 640.0 * m_scaleFactor;
-            const double s = (640.0 > 0) ? (w / 640.0) : 1.0;
-            vitem->setScale(s);
-            vitem->setPos(scenePos.x() - w/2.0, scenePos.y() - (360.0 * m_scaleFactor)/2.0);
+            const double h = 360.0 * m_scaleFactor;
+            vitem->setPos(scenePos.x() - w/2.0, scenePos.y() - h/2.0);
             m_scene->addItem(vitem);
         } else {
             QGraphicsView::dropEvent(event);
