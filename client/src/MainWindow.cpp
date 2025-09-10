@@ -646,6 +646,13 @@ public:
     m_muteIcon->setZValue(102.0);
     m_muteIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_muteIcon->setAcceptedMouseButtons(Qt::NoButton);
+    // Slash overlay for muted state
+    m_muteSlashIcon = new QGraphicsPathItem(m_muteBtnRectItem);
+    m_muteSlashIcon->setBrush(Qt::NoBrush);
+    m_muteSlashIcon->setPen(QPen(Qt::white, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    m_muteSlashIcon->setZValue(103.0);
+    m_muteSlashIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+    m_muteSlashIcon->setAcceptedMouseButtons(Qt::NoButton);
 
     // Volume slider (top row, remaining width)
     m_volumeBgRectItem = new QGraphicsRectItem(m_controlsBg);
@@ -686,6 +693,7 @@ public:
     if (m_repeatIcon) m_repeatIcon->setVisible(false);
     if (m_muteBtnRectItem) m_muteBtnRectItem->setVisible(false);
     if (m_muteIcon) m_muteIcon->setVisible(false);
+    if (m_muteSlashIcon) m_muteSlashIcon->setVisible(false);
     if (m_volumeBgRectItem) m_volumeBgRectItem->setVisible(false);
     if (m_volumeFillRectItem) m_volumeFillRectItem->setVisible(false);
     if (m_progressBgRectItem) m_progressBgRectItem->setVisible(false);
@@ -710,7 +718,10 @@ public:
     }
     void toggleMute() {
         if (!m_audio) return;
-        m_audio->setMuted(!m_audio->isMuted());
+    m_audio->setMuted(!m_audio->isMuted());
+    // Ensure the icon updates immediately
+    updateControlsLayout();
+    update();
     }
     void seekToRatio(qreal r) {
         if (!m_player || m_durationMs <= 0) return;
@@ -924,6 +935,7 @@ private:
     if (m_repeatIcon) m_repeatIcon->setVisible(show);
     if (m_muteBtnRectItem) m_muteBtnRectItem->setVisible(show);
     if (m_muteIcon) m_muteIcon->setVisible(show);
+    if (m_muteSlashIcon) m_muteSlashIcon->setVisible(show && m_audio && m_audio->isMuted());
     if (m_volumeBgRectItem) m_volumeBgRectItem->setVisible(show);
     if (m_volumeFillRectItem) m_volumeFillRectItem->setVisible(show);
         if (m_progressBgRectItem) m_progressBgRectItem->setVisible(show);
@@ -1035,22 +1047,41 @@ private:
             QTransform t; t.translate(delta.x(), delta.y());
             m_stopIcon->setPath(t.map(path));
         }
-        // Repeat icon: circular arrows
+        // Repeat icon: two arrows forming a loop
         if (m_repeatIcon) {
             qreal w = repeatWpx, h = rowH;
+            qreal lx = w * 0.2;
+            qreal rx = w * 0.8;
+            qreal topY = h * 0.35;
+            qreal botY = h * 0.65;
+            qreal thick = std::max<qreal>(1.0, h * 0.12);
+            qreal head = w * 0.16;
             QPainterPath path;
-            QRectF r(w*0.18, h*0.18, w*0.64, h*0.64);
-            path.addEllipse(r);
-            // Add arrow heads (simplified)
-            QPolygonF a1; a1 << QPointF(r.right(), r.center().y()) << QPointF(r.right()-w*0.15, r.center().y()-h*0.08) << QPointF(r.right()-w*0.15, r.center().y()+h*0.08);
-            QPolygonF a2; a2 << QPointF(r.left(), r.center().y()) << QPointF(r.left()+w*0.15, r.center().y()-h*0.08) << QPointF(r.left()+w*0.15, r.center().y()+h*0.08);
-            path.addPolygon(a1); path.addPolygon(a2);
+            // Top bar (left -> right)
+            path.addRect(QRectF(lx, topY - thick/2.0, (rx - head) - lx, thick));
+            // Top arrow head (pointing right)
+            QPolygonF headTop; headTop << QPointF(rx, topY)
+                                       << QPointF(rx - head, topY - thick*0.9)
+                                       << QPointF(rx - head, topY + thick*0.9);
+            path.addPolygon(headTop);
+            // Right connector (down)
+            path.addRect(QRectF(rx - thick/2.0, topY, thick, botY - topY));
+            // Bottom bar (right -> left)
+            path.addRect(QRectF(lx + head, botY - thick/2.0, rx - (lx + head), thick));
+            // Bottom arrow head (pointing left)
+            QPolygonF headBot; headBot << QPointF(lx, botY)
+                                       << QPointF(lx + head, botY - thick*0.9)
+                                       << QPointF(lx + head, botY + thick*0.9);
+            path.addPolygon(headBot);
+            // Left connector (up)
+            path.addRect(QRectF(lx - thick/2.0, topY, thick, botY - topY));
+            // Center within the square
             QRectF bb = path.boundingRect();
             QPointF delta((w - bb.width())/2.0 - bb.left(), (h - bb.height())/2.0 - bb.top());
             QTransform t; t.translate(delta.x(), delta.y());
             m_repeatIcon->setPath(t.map(path));
         }
-        // Mute icon: speaker with slash if muted
+        // Mute icon: speaker only; slash drawn as separate overlay when muted
         if (m_muteIcon) {
             qreal w = muteWpx, h = rowH;
             QPainterPath path;
@@ -1058,14 +1089,23 @@ private:
             path.addRect(box);
             QPolygonF horn; horn << QPointF(box.right(), box.top()) << QPointF(w*0.6, h*0.2) << QPointF(w*0.6, h*0.8) << QPointF(box.right(), box.bottom());
             path.addPolygon(horn);
-            if (m_audio && m_audio->isMuted()) {
-                path.moveTo(w*0.2, h*0.2);
-                path.lineTo(w*0.8, h*0.8);
-            }
             QRectF bb = path.boundingRect();
             QPointF delta((w - bb.width())/2.0 - bb.left(), (h - bb.height())/2.0 - bb.top());
             QTransform t; t.translate(delta.x(), delta.y());
             m_muteIcon->setPath(t.map(path));
+        }
+        // Update mute slash overlay path and visibility
+        if (m_muteSlashIcon) {
+            qreal w = muteWpx, h = rowH;
+            QPainterPath slash;
+            slash.moveTo(w*0.2, h*0.2);
+            slash.lineTo(w*0.8, h*0.8);
+            // center to button square using same translation as icon
+            QRectF bb = slash.boundingRect();
+            QPointF delta((w - bb.width())/2.0 - bb.left(), (h - bb.height())/2.0 - bb.top());
+            QTransform t; t.translate(delta.x(), delta.y());
+            m_muteSlashIcon->setPath(t.map(slash));
+            m_muteSlashIcon->setVisible(m_audio && m_audio->isMuted());
         }
         // Store item-space rects for hit testing on the parent
         // Map viewport-space rectangles back to item coords
@@ -1113,6 +1153,7 @@ private:
     QGraphicsPathItem* m_repeatIcon = nullptr;
     QGraphicsRectItem* m_muteBtnRectItem = nullptr;
     QGraphicsPathItem* m_muteIcon = nullptr;
+    QGraphicsPathItem* m_muteSlashIcon = nullptr;
     QGraphicsRectItem* m_volumeBgRectItem = nullptr;
     QGraphicsRectItem* m_volumeFillRectItem = nullptr;
     QGraphicsRectItem* m_progressBgRectItem = nullptr;
