@@ -767,6 +767,35 @@ public:
         m_player->setPosition(static_cast<qint64>(r * m_durationMs));
     }
     void setInitialScaleFactor(qreal f) { m_initialScaleFactor = f; }
+    // Drag helpers for view-level coordination
+    bool isDraggingProgress() const { return m_draggingProgress; }
+    bool isDraggingVolume() const { return m_draggingVolume; }
+    void updateDragWithScenePos(const QPointF& scenePos) {
+        QPointF p = mapFromScene(scenePos);
+        if (m_draggingProgress) {
+            qreal r = (p.x() - m_progRectItemCoords.left()) / m_progRectItemCoords.width();
+            r = std::clamp<qreal>(r, 0.0, 1.0);
+            seekToRatio(r);
+            if (m_durationMs > 0) m_positionMs = static_cast<qint64>(r * m_durationMs);
+            updateControlsLayout();
+            update();
+        } else if (m_draggingVolume) {
+            qreal r = (p.x() - m_volumeRectItemCoords.left()) / m_volumeRectItemCoords.width();
+            r = std::clamp<qreal>(r, 0.0, 1.0);
+            if (m_audio) m_audio->setVolume(r);
+            updateControlsLayout();
+            update();
+        }
+    }
+    void endDrag() {
+        if (m_draggingProgress || m_draggingVolume) {
+            m_draggingProgress = false;
+            m_draggingVolume = false;
+            ungrabMouse();
+            updateControlsLayout();
+            update();
+        }
+    }
     // Expose a helper for view-level control handling
     bool handleControlsPressAtItemPos(const QPointF& itemPos) {
         if (!isSelected()) return false;
@@ -782,6 +811,9 @@ public:
         if (m_progRectItemCoords.contains(itemPos)) {
             qreal r = (itemPos.x() - m_progRectItemCoords.left()) / m_progRectItemCoords.width();
             seekToRatio(r);
+            // Begin drag-to-seek
+            m_draggingProgress = true;
+            grabMouse();
             return true;
         }
         // Volume slider
@@ -789,6 +821,10 @@ public:
             qreal r = (itemPos.x() - m_volumeRectItemCoords.left()) / m_volumeRectItemCoords.width();
             r = std::clamp<qreal>(r, 0.0, 1.0);
             if (m_audio) m_audio->setVolume(r);
+            updateControlsLayout(); update();
+            // Begin drag-to-volume
+            m_draggingVolume = true;
+            grabMouse();
             return true;
         }
         return false;
@@ -873,6 +909,8 @@ public:
         if (isSelected() && m_progRectItemCoords.contains(event->pos())) {
             qreal r = (event->pos().x() - m_progRectItemCoords.left()) / m_progRectItemCoords.width();
             seekToRatio(r);
+            m_draggingProgress = true;
+            grabMouse();
             event->accept();
             return;
         }
@@ -880,6 +918,9 @@ public:
             qreal r = (event->pos().x() - m_volumeRectItemCoords.left()) / m_volumeRectItemCoords.width();
             r = std::clamp<qreal>(r, 0.0, 1.0);
             if (m_audio) m_audio->setVolume(r);
+            updateControlsLayout(); update();
+            m_draggingVolume = true;
+            grabMouse();
             event->accept();
             return;
         }
@@ -937,6 +978,45 @@ protected:
             updateControlsLayout();
         }
         return ResizableMediaBase::itemChange(change, value);
+    }
+
+    void mouseMoveEvent(QGraphicsSceneMouseEvent* event) override {
+        // Allow base to manage resize drag when active
+        if (m_activeHandle != None) { ResizableMediaBase::mouseMoveEvent(event); return; }
+        if (event->buttons() & Qt::LeftButton) {
+            if (m_draggingProgress) {
+                qreal r = (event->pos().x() - m_progRectItemCoords.left()) / m_progRectItemCoords.width();
+                // Clamp and update both the player and local UI state for immediate feedback
+                r = std::clamp<qreal>(r, 0.0, 1.0);
+                seekToRatio(r);
+                if (m_durationMs > 0) m_positionMs = static_cast<qint64>(r * m_durationMs);
+                updateControlsLayout();
+                update();
+                event->accept();
+                return;
+            }
+            if (m_draggingVolume) {
+                qreal r = (event->pos().x() - m_volumeRectItemCoords.left()) / m_volumeRectItemCoords.width();
+                r = std::clamp<qreal>(r, 0.0, 1.0);
+                if (m_audio) m_audio->setVolume(r);
+                updateControlsLayout();
+                update();
+                event->accept();
+                return;
+            }
+        }
+        ResizableMediaBase::mouseMoveEvent(event);
+    }
+
+    void mouseReleaseEvent(QGraphicsSceneMouseEvent* event) override {
+        if (m_draggingProgress || m_draggingVolume) {
+            m_draggingProgress = false;
+            m_draggingVolume = false;
+            ungrabMouse();
+            event->accept();
+            return;
+        }
+        ResizableMediaBase::mouseReleaseEvent(event);
     }
 private:
     void maybeAdoptFrameSize(const QVideoFrame& f) {
@@ -1257,6 +1337,9 @@ private:
     QRectF m_volumeRectItemCoords;
     QRectF m_progRectItemCoords;
     bool m_repeatEnabled = false;
+    // Drag state for sliders
+    bool m_draggingProgress = false;
+    bool m_draggingVolume = false;
 };
 
 MainWindow::MainWindow(QWidget *parent)
@@ -2104,6 +2187,16 @@ void ScreenCanvas::mouseMoveEvent(QMouseEvent* event) {
     
     // Handle dragging and panning logic
     if (event->buttons() & Qt::LeftButton) {
+        // If a selected video is currently dragging its sliders, update it even if cursor left its shape
+        for (QGraphicsItem* it : m_scene->items()) {
+            if (auto* v = dynamic_cast<ResizableVideoItem*>(it)) {
+                if (v->isSelected() && (v->isDraggingProgress() || v->isDraggingVolume())) {
+                    v->updateDragWithScenePos(mapToScene(event->pos()));
+                    event->accept();
+                    return;
+                }
+            }
+        }
         const QList<QGraphicsItem*> hitItems = items(event->pos());
         auto toMedia = [](QGraphicsItem* x)->ResizableMediaBase* {
             while (x) { if (auto* m = dynamic_cast<ResizableMediaBase*>(x)) return m; x = x->parentItem(); }
@@ -2125,6 +2218,16 @@ void ScreenCanvas::mouseMoveEvent(QMouseEvent* event) {
 
 void ScreenCanvas::mouseReleaseEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
+        // Finalize any active drag on selected video controls
+        for (QGraphicsItem* it : m_scene->items()) {
+            if (auto* v = dynamic_cast<ResizableVideoItem*>(it)) {
+                if (v->isSelected() && (v->isDraggingProgress() || v->isDraggingVolume())) {
+                    v->endDrag();
+                    event->accept();
+                    return;
+                }
+            }
+        }
         if (m_panning) {
             m_panning = false;
             event->accept();
