@@ -158,6 +158,32 @@ private:
     QColor m_color;
 };
 
+// Simple rounded-rectangle graphics item with a settable rect and radius
+class RoundedRectItem : public QGraphicsPathItem {
+public:
+    explicit RoundedRectItem(QGraphicsItem* parent = nullptr)
+        : QGraphicsPathItem(parent) {}
+    void setRect(const QRectF& r) { m_rect = r; updatePath(); }
+    void setRect(qreal x, qreal y, qreal w, qreal h) { setRect(QRectF(x, y, w, h)); }
+    QRectF rect() const { return m_rect; }
+    void setRadius(qreal radiusPx) { m_radius = std::max<qreal>(0.0, radiusPx); updatePath(); }
+    qreal radius() const { return m_radius; }
+private:
+    void updatePath() {
+        QPainterPath p;
+        if (m_rect.isNull()) { setPath(p); return; }
+        // Clamp radius so it never exceeds half of width/height
+        const qreal r = std::min({ m_radius, m_rect.width() * 0.5, m_rect.height() * 0.5 });
+        if (r > 0.0)
+            p.addRoundedRect(m_rect, r, r);
+        else
+            p.addRect(m_rect);
+        setPath(p);
+    }
+    QRectF m_rect;
+    qreal  m_radius = 0.0;
+};
+
 // Resizable, movable pixmap item with corner handles; keeps aspect ratio
 class ResizableMediaBase : public QGraphicsItem {
 public:
@@ -172,7 +198,7 @@ public:
         setZValue(1.0);
         // Filename label setup (zoom-independent via ItemIgnoresTransformations)
         m_filename = filename;
-    m_labelBg = new QGraphicsRectItem(this);
+    m_labelBg = new RoundedRectItem(this);
     m_labelBg->setPen(Qt::NoPen);
     // Unified translucent dark background used by label and video controls
     m_labelBg->setBrush(QColor(0, 0, 0, 160));
@@ -190,6 +216,10 @@ public:
     // -1 means "auto" (use filename label background height).
     static void setHeightOfMediaOverlaysPx(int px) { heightOfMediaOverlays = px; }
     static int getHeightOfMediaOverlaysPx() { return heightOfMediaOverlays; }
+    // Global override for corner radius (in pixels) for overlay buttons and filename label background
+    // Applies to: filename background, play/stop/repeat/mute buttons. Excludes: progress & volume bars.
+    static void setCornerRadiusOfMediaOverlaysPx(int px) { cornerRadiusOfMediaOverlays = std::max(0, px); }
+    static int getCornerRadiusOfMediaOverlaysPx() { return cornerRadiusOfMediaOverlays; }
     // Utility for view: tell if a given item-space pos is on a resize handle
     bool isOnHandleAtItemPos(const QPointF& itemPos) const {
         return hitTestHandle(itemPos) != None;
@@ -394,10 +424,11 @@ protected:
     Handle m_lastHoverHandle = None;
     // Filename label elements
     QString m_filename;
-    QGraphicsRectItem* m_labelBg = nullptr;
+    RoundedRectItem* m_labelBg = nullptr;
     QGraphicsTextItem* m_labelText = nullptr;
     // Shared overlay height config
     static int heightOfMediaOverlays;
+    static int cornerRadiusOfMediaOverlays;
 
     Handle hitTestHandle(const QPointF& p) const {
         // Only allow handle interaction when selected
@@ -458,7 +489,9 @@ protected:
         QRectF tr = m_labelText->boundingRect();
         const qreal bgW = tr.width() + 2*padXpx;
         const qreal bgH = tr.height() + 2*padYpx;
-        m_labelBg->setRect(0, 0, bgW, bgH);
+    m_labelBg->setRect(0, 0, bgW, bgH);
+    // Apply configured corner radius
+    m_labelBg->setRadius(ResizableMediaBase::getCornerRadiusOfMediaOverlaysPx());
         m_labelText->setPos(padXpx, padYpx);
 
         // Position: center above image top edge
@@ -482,12 +515,13 @@ protected:
         // Map back to item coords
         QPointF labelTopLeftScene = v->mapToScene(labelTopLeftView.toPoint());
         QPointF labelTopLeftItem = mapFromScene(labelTopLeftScene);
-        m_labelBg->setPos(labelTopLeftItem);
+    m_labelBg->setPos(labelTopLeftItem);
     }
 };
 
 // Default: auto (match filename label background height)
 int ResizableMediaBase::heightOfMediaOverlays = -1;
+int ResizableMediaBase::cornerRadiusOfMediaOverlays = 6;
 
 // Image media implementation using the shared base
 class ResizablePixmapItem : public ResizableMediaBase {
@@ -591,7 +625,7 @@ public:
     m_controlsBg->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_controlsBg->setAcceptedMouseButtons(Qt::NoButton);
 
-    m_playBtnRectItem = new QGraphicsRectItem(m_controlsBg);
+    m_playBtnRectItem = new RoundedRectItem(m_controlsBg);
     m_playBtnRectItem->setPen(Qt::NoPen);
     // Square background for the play button, same as filename label
     m_playBtnRectItem->setBrush(m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
@@ -607,7 +641,7 @@ public:
     m_playIcon->setAcceptedMouseButtons(Qt::NoButton);
 
     // Stop button (top row, square)
-    m_stopBtnRectItem = new QGraphicsRectItem(m_controlsBg);
+    m_stopBtnRectItem = new RoundedRectItem(m_controlsBg);
     m_stopBtnRectItem->setPen(Qt::NoPen);
     m_stopBtnRectItem->setBrush(m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
     m_stopBtnRectItem->setZValue(101.0);
@@ -621,7 +655,7 @@ public:
     m_stopIcon->setAcceptedMouseButtons(Qt::NoButton);
 
     // Repeat toggle button (top row, square)
-    m_repeatBtnRectItem = new QGraphicsRectItem(m_controlsBg);
+    m_repeatBtnRectItem = new RoundedRectItem(m_controlsBg);
     m_repeatBtnRectItem->setPen(Qt::NoPen);
     m_repeatBtnRectItem->setBrush(m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
     m_repeatBtnRectItem->setZValue(101.0);
@@ -635,7 +669,7 @@ public:
     m_repeatIcon->setAcceptedMouseButtons(Qt::NoButton);
 
     // Mute toggle button (top row, square)
-    m_muteBtnRectItem = new QGraphicsRectItem(m_controlsBg);
+    m_muteBtnRectItem = new RoundedRectItem(m_controlsBg);
     m_muteBtnRectItem->setPen(Qt::NoPen);
     m_muteBtnRectItem->setBrush(m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
     m_muteBtnRectItem->setZValue(101.0);
@@ -1003,19 +1037,23 @@ private:
         int x4 = x3 + muteWpx + buttonGap;
         if (m_playBtnRectItem) {
             m_playBtnRectItem->setRect(0, 0, playWpx, rowH); m_playBtnRectItem->setPos(x0, 0);
+            m_playBtnRectItem->setRadius(ResizableMediaBase::getCornerRadiusOfMediaOverlaysPx());
             // keep default base brush
             m_playBtnRectItem->setBrush(baseBrush);
         }
         if (m_stopBtnRectItem) {
             m_stopBtnRectItem->setRect(0, 0, stopWpx, rowH); m_stopBtnRectItem->setPos(x1, 0);
+            m_stopBtnRectItem->setRadius(ResizableMediaBase::getCornerRadiusOfMediaOverlaysPx());
             m_stopBtnRectItem->setBrush(baseBrush);
         }
         if (m_repeatBtnRectItem) {
             m_repeatBtnRectItem->setRect(0, 0, repeatWpx, rowH); m_repeatBtnRectItem->setPos(x2, 0);
+            m_repeatBtnRectItem->setRadius(ResizableMediaBase::getCornerRadiusOfMediaOverlaysPx());
             m_repeatBtnRectItem->setBrush(m_repeatEnabled ? activeBrush : baseBrush);
         }
         if (m_muteBtnRectItem) {
             m_muteBtnRectItem->setRect(0, 0, muteWpx, rowH); m_muteBtnRectItem->setPos(x3, 0);
+            m_muteBtnRectItem->setRadius(ResizableMediaBase::getCornerRadiusOfMediaOverlaysPx());
             bool muted = m_audio && m_audio->isMuted();
             m_muteBtnRectItem->setBrush(muted ? activeBrush : baseBrush);
         }
@@ -1196,13 +1234,13 @@ private:
     bool m_posterImageSet = false;
     // Floating controls (absolute px)
     QGraphicsRectItem* m_controlsBg = nullptr;
-    QGraphicsRectItem* m_playBtnRectItem = nullptr;
+    RoundedRectItem* m_playBtnRectItem = nullptr;
     QGraphicsPathItem* m_playIcon = nullptr; // path supports both triangle and bars
-    QGraphicsRectItem* m_stopBtnRectItem = nullptr;
+    RoundedRectItem* m_stopBtnRectItem = nullptr;
     QGraphicsPathItem* m_stopIcon = nullptr;
-    QGraphicsRectItem* m_repeatBtnRectItem = nullptr;
+    RoundedRectItem* m_repeatBtnRectItem = nullptr;
     QGraphicsPathItem* m_repeatIcon = nullptr;
-    QGraphicsRectItem* m_muteBtnRectItem = nullptr;
+    RoundedRectItem* m_muteBtnRectItem = nullptr;
     QGraphicsPathItem* m_muteIcon = nullptr;
     QGraphicsPathItem* m_muteSlashIcon = nullptr;
     QGraphicsRectItem* m_volumeBgRectItem = nullptr;
