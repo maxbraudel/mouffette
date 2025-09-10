@@ -727,6 +727,23 @@ public:
         }
         ResizableMediaBase::mousePressEvent(event);
     }
+    void mouseDoubleClickEvent(QGraphicsSceneMouseEvent* event) override {
+        // Treat double-clicks on controls the same as single clicks; keep selection
+        if (isSelected()) {
+            if (m_playBtnRectItemCoords.contains(event->pos())) {
+                togglePlayPause();
+                event->accept();
+                return;
+            }
+            if (m_progRectItemCoords.contains(event->pos())) {
+                qreal r = (event->pos().x() - m_progRectItemCoords.left()) / m_progRectItemCoords.width();
+                seekToRatio(r);
+                event->accept();
+                return;
+            }
+        }
+        ResizableMediaBase::mouseDoubleClickEvent(event);
+    }
 protected:
     QVariant itemChange(GraphicsItemChange change, const QVariant &value) override {
         if (change == ItemSelectedChange) {
@@ -1671,6 +1688,31 @@ void ScreenCanvas::mousePressEvent(QMouseEvent* event) {
         return;
     }
     QGraphicsView::mousePressEvent(event);
+}
+
+void ScreenCanvas::mouseDoubleClickEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton) {
+        const QPointF scenePos = mapToScene(event->pos());
+        const QList<QGraphicsItem*> hitItems = items(event->pos());
+        auto toMedia = [](QGraphicsItem* x)->ResizableMediaBase* {
+            while (x) { if (auto* m = dynamic_cast<ResizableMediaBase*>(x)) return m; x = x->parentItem(); }
+            return nullptr;
+        };
+        ResizableMediaBase* mediaHit = nullptr;
+        for (QGraphicsItem* it : hitItems) { if ((mediaHit = toMedia(it))) break; }
+        if (mediaHit) {
+            if (!mediaHit->isSelected()) mediaHit->setSelected(true);
+            if (auto* v = dynamic_cast<ResizableVideoItem*>(mediaHit)) {
+                const QPointF itemPos = v->mapFromScene(scenePos);
+                if (v->handleControlsPressAtItemPos(itemPos)) { event->accept(); return; }
+            }
+            // Let default double-click behavior (e.g., edit?) proceed without clearing selection
+            QGraphicsView::mouseDoubleClickEvent(event);
+            return;
+        }
+        // If no media hit, pass through
+    }
+    QGraphicsView::mouseDoubleClickEvent(event);
 }
 
 void ScreenCanvas::mouseMoveEvent(QMouseEvent* event) {
