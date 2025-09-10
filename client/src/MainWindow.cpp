@@ -571,6 +571,12 @@ public:
                     if (m_player) m_player->play();
                 }
             }
+            if (s == QMediaPlayer::EndOfMedia) {
+                if (m_repeatEnabled) {
+                    m_player->setPosition(0);
+                    m_player->play();
+                }
+            }
         });
     QObject::connect(m_player, &QMediaPlayer::durationChanged, [this](qint64 d){ m_durationMs = d; this->update(); });
     QObject::connect(m_player, &QMediaPlayer::positionChanged, [this](qint64 p){ m_positionMs = p; this->update(); });
@@ -599,6 +605,62 @@ public:
     m_playIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_playIcon->setAcceptedMouseButtons(Qt::NoButton);
 
+    // Stop button (top row, square)
+    m_stopBtnRectItem = new QGraphicsRectItem(m_controlsBg);
+    m_stopBtnRectItem->setPen(Qt::NoPen);
+    m_stopBtnRectItem->setBrush(m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
+    m_stopBtnRectItem->setZValue(101.0);
+    m_stopBtnRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+    m_stopBtnRectItem->setAcceptedMouseButtons(Qt::NoButton);
+    m_stopIcon = new QGraphicsPathItem(m_stopBtnRectItem);
+    m_stopIcon->setBrush(Qt::white);
+    m_stopIcon->setPen(Qt::NoPen);
+    m_stopIcon->setZValue(102.0);
+    m_stopIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+    m_stopIcon->setAcceptedMouseButtons(Qt::NoButton);
+
+    // Repeat toggle button (top row, square)
+    m_repeatBtnRectItem = new QGraphicsRectItem(m_controlsBg);
+    m_repeatBtnRectItem->setPen(Qt::NoPen);
+    m_repeatBtnRectItem->setBrush(m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
+    m_repeatBtnRectItem->setZValue(101.0);
+    m_repeatBtnRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+    m_repeatBtnRectItem->setAcceptedMouseButtons(Qt::NoButton);
+    m_repeatIcon = new QGraphicsPathItem(m_repeatBtnRectItem);
+    m_repeatIcon->setBrush(Qt::white);
+    m_repeatIcon->setPen(Qt::NoPen);
+    m_repeatIcon->setZValue(102.0);
+    m_repeatIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+    m_repeatIcon->setAcceptedMouseButtons(Qt::NoButton);
+
+    // Mute toggle button (top row, square)
+    m_muteBtnRectItem = new QGraphicsRectItem(m_controlsBg);
+    m_muteBtnRectItem->setPen(Qt::NoPen);
+    m_muteBtnRectItem->setBrush(m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
+    m_muteBtnRectItem->setZValue(101.0);
+    m_muteBtnRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+    m_muteBtnRectItem->setAcceptedMouseButtons(Qt::NoButton);
+    m_muteIcon = new QGraphicsPathItem(m_muteBtnRectItem);
+    m_muteIcon->setBrush(Qt::white);
+    m_muteIcon->setPen(Qt::NoPen);
+    m_muteIcon->setZValue(102.0);
+    m_muteIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+    m_muteIcon->setAcceptedMouseButtons(Qt::NoButton);
+
+    // Volume slider (top row, remaining width)
+    m_volumeBgRectItem = new QGraphicsRectItem(m_controlsBg);
+    m_volumeBgRectItem->setPen(Qt::NoPen);
+    m_volumeBgRectItem->setBrush(m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
+    m_volumeBgRectItem->setZValue(101.0);
+    m_volumeBgRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+    m_volumeBgRectItem->setAcceptedMouseButtons(Qt::NoButton);
+    m_volumeFillRectItem = new QGraphicsRectItem(m_volumeBgRectItem);
+    m_volumeFillRectItem->setPen(Qt::NoPen);
+    m_volumeFillRectItem->setBrush(QColor(74,144,226));
+    m_volumeFillRectItem->setZValue(102.0);
+    m_volumeFillRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+    m_volumeFillRectItem->setAcceptedMouseButtons(Qt::NoButton);
+
     m_progressBgRectItem = new QGraphicsRectItem(m_controlsBg);
     m_progressBgRectItem->setPen(Qt::NoPen);
     // Full-width background for the progress row, same as filename label
@@ -618,6 +680,14 @@ public:
     if (m_controlsBg) m_controlsBg->setVisible(false);
     if (m_playBtnRectItem) m_playBtnRectItem->setVisible(false);
     if (m_playIcon) m_playIcon->setVisible(false);
+    if (m_stopBtnRectItem) m_stopBtnRectItem->setVisible(false);
+    if (m_stopIcon) m_stopIcon->setVisible(false);
+    if (m_repeatBtnRectItem) m_repeatBtnRectItem->setVisible(false);
+    if (m_repeatIcon) m_repeatIcon->setVisible(false);
+    if (m_muteBtnRectItem) m_muteBtnRectItem->setVisible(false);
+    if (m_muteIcon) m_muteIcon->setVisible(false);
+    if (m_volumeBgRectItem) m_volumeBgRectItem->setVisible(false);
+    if (m_volumeFillRectItem) m_volumeFillRectItem->setVisible(false);
     if (m_progressBgRectItem) m_progressBgRectItem->setVisible(false);
     if (m_progressFillRectItem) m_progressFillRectItem->setVisible(false);
     }
@@ -630,6 +700,18 @@ public:
         if (!m_player) return;
         if (m_player->playbackState() == QMediaPlayer::PlayingState) m_player->pause(); else m_player->play();
     }
+    void stopToBeginning() {
+        if (!m_player) return;
+        m_player->pause();
+        m_player->setPosition(0);
+    }
+    void toggleRepeat() {
+        m_repeatEnabled = !m_repeatEnabled;
+    }
+    void toggleMute() {
+        if (!m_audio) return;
+        m_audio->setMuted(!m_audio->isMuted());
+    }
     void seekToRatio(qreal r) {
         if (!m_player || m_durationMs <= 0) return;
         r = std::clamp<qreal>(r, 0.0, 1.0);
@@ -641,10 +723,23 @@ public:
         if (!isSelected()) return false;
         // Play button
         if (m_playBtnRectItemCoords.contains(itemPos)) { togglePlayPause(); return true; }
+        // Stop
+        if (m_stopBtnRectItemCoords.contains(itemPos)) { stopToBeginning(); return true; }
+        // Repeat
+        if (m_repeatBtnRectItemCoords.contains(itemPos)) { toggleRepeat(); return true; }
+        // Mute
+        if (m_muteBtnRectItemCoords.contains(itemPos)) { toggleMute(); return true; }
         // Progress bar
         if (m_progRectItemCoords.contains(itemPos)) {
             qreal r = (itemPos.x() - m_progRectItemCoords.left()) / m_progRectItemCoords.width();
             seekToRatio(r);
+            return true;
+        }
+        // Volume slider
+        if (m_volumeRectItemCoords.contains(itemPos)) {
+            qreal r = (itemPos.x() - m_volumeRectItemCoords.left()) / m_volumeRectItemCoords.width();
+            r = std::clamp<qreal>(r, 0.0, 1.0);
+            if (m_audio) m_audio->setVolume(r);
             return true;
         }
         return false;
@@ -660,7 +755,7 @@ public:
             painter->drawImage(br, m_posterImage);
         }
         // Update floating controls overlay (only relevant when selected)
-        if (isSelected()) updateControlsLayout();
+    if (isSelected()) updateControlsLayout();
         // Selection/handles and label
         paintSelectionAndLabel(painter);
     }
@@ -689,7 +784,11 @@ public:
         // controls clickable areas only when selected
         if (isSelected()) {
             if (!m_playBtnRectItemCoords.isNull()) p.addRect(m_playBtnRectItemCoords);
+            if (!m_stopBtnRectItemCoords.isNull()) p.addRect(m_stopBtnRectItemCoords);
+            if (!m_repeatBtnRectItemCoords.isNull()) p.addRect(m_repeatBtnRectItemCoords);
+            if (!m_muteBtnRectItemCoords.isNull()) p.addRect(m_muteBtnRectItemCoords);
             if (!m_progRectItemCoords.isNull()) p.addRect(m_progRectItemCoords);
+            if (!m_volumeRectItemCoords.isNull()) p.addRect(m_volumeRectItemCoords);
         }
         if (isSelected()) {
             const qreal s = toItemLengthFromPixels(m_selectionSize);
@@ -719,9 +818,19 @@ public:
             event->accept();
             return;
         }
+        if (isSelected() && m_stopBtnRectItemCoords.contains(event->pos())) { stopToBeginning(); event->accept(); return; }
+        if (isSelected() && m_repeatBtnRectItemCoords.contains(event->pos())) { toggleRepeat(); event->accept(); return; }
+        if (isSelected() && m_muteBtnRectItemCoords.contains(event->pos())) { toggleMute(); event->accept(); return; }
         if (isSelected() && m_progRectItemCoords.contains(event->pos())) {
             qreal r = (event->pos().x() - m_progRectItemCoords.left()) / m_progRectItemCoords.width();
             seekToRatio(r);
+            event->accept();
+            return;
+        }
+        if (isSelected() && m_volumeRectItemCoords.contains(event->pos())) {
+            qreal r = (event->pos().x() - m_volumeRectItemCoords.left()) / m_volumeRectItemCoords.width();
+            r = std::clamp<qreal>(r, 0.0, 1.0);
+            if (m_audio) m_audio->setVolume(r);
             event->accept();
             return;
         }
@@ -735,9 +844,31 @@ public:
                 event->accept();
                 return;
             }
+            if (m_stopBtnRectItemCoords.contains(event->pos())) {
+                stopToBeginning();
+                event->accept();
+                return;
+            }
+            if (m_repeatBtnRectItemCoords.contains(event->pos())) {
+                toggleRepeat();
+                event->accept();
+                return;
+            }
+            if (m_muteBtnRectItemCoords.contains(event->pos())) {
+                toggleMute();
+                event->accept();
+                return;
+            }
             if (m_progRectItemCoords.contains(event->pos())) {
                 qreal r = (event->pos().x() - m_progRectItemCoords.left()) / m_progRectItemCoords.width();
                 seekToRatio(r);
+                event->accept();
+                return;
+            }
+            if (m_volumeRectItemCoords.contains(event->pos())) {
+                qreal r = (event->pos().x() - m_volumeRectItemCoords.left()) / m_volumeRectItemCoords.width();
+                r = std::clamp<qreal>(r, 0.0, 1.0);
+                if (m_audio) m_audio->setVolume(r);
                 event->accept();
                 return;
             }
@@ -787,6 +918,14 @@ private:
         if (m_controlsBg) m_controlsBg->setVisible(show);
         if (m_playBtnRectItem) m_playBtnRectItem->setVisible(show);
         if (m_playIcon) m_playIcon->setVisible(show);
+    if (m_stopBtnRectItem) m_stopBtnRectItem->setVisible(show);
+    if (m_stopIcon) m_stopIcon->setVisible(show);
+    if (m_repeatBtnRectItem) m_repeatBtnRectItem->setVisible(show);
+    if (m_repeatIcon) m_repeatIcon->setVisible(show);
+    if (m_muteBtnRectItem) m_muteBtnRectItem->setVisible(show);
+    if (m_muteIcon) m_muteIcon->setVisible(show);
+    if (m_volumeBgRectItem) m_volumeBgRectItem->setVisible(show);
+    if (m_volumeFillRectItem) m_volumeFillRectItem->setVisible(show);
         if (m_progressBgRectItem) m_progressBgRectItem->setVisible(show);
         if (m_progressFillRectItem) m_progressFillRectItem->setVisible(show);
     }
@@ -803,7 +942,13 @@ private:
     const int rowH = (overrideH > 0) ? overrideH : (labelBgH > 0 ? static_cast<int>(std::round(labelBgH)) : fallbackH);
     const int totalWpx = 260; // absolute width for controls overlay
     const int playWpx = rowH; // square button width equals height
-    const int progWpx = totalWpx; // progress spans full width under play
+    // Top row: play, stop, repeat, mute, then volume slider filling the rest, with gaps between buttons
+    const int stopWpx = rowH;
+    const int repeatWpx = rowH;
+    const int muteWpx = rowH;
+    const int buttonGap = gapPx; // horizontal gap between buttons equals outer/inner gap
+    const int volumeWpx = std::max(0, totalWpx - (playWpx + stopWpx + repeatWpx + muteWpx) - buttonGap * 4);
+    const int progWpx = totalWpx; // progress spans full width on second row
 
         // Compute bottom-center of video in viewport coords
         QPointF bottomCenterItem(baseWidth()/2.0, baseHeight());
@@ -819,23 +964,34 @@ private:
             m_controlsBg->setRect(0, 0, totalWpx, rowH * 2 + gapPx);
             m_controlsBg->setPos(ctrlTopLeftItem);
         }
-        if (m_playBtnRectItem) {
-            // Top-left cell
-            m_playBtnRectItem->setRect(0, 0, playWpx, rowH);
-            m_playBtnRectItem->setPos(0, 0); // relative to controlsBg
+        qreal x = 0;
+        if (m_playBtnRectItem) { m_playBtnRectItem->setRect(0, 0, playWpx, rowH); m_playBtnRectItem->setPos(x, 0); }
+        x += playWpx + buttonGap;
+        if (m_stopBtnRectItem) { m_stopBtnRectItem->setRect(0, 0, stopWpx, rowH); m_stopBtnRectItem->setPos(x, 0); }
+        x += stopWpx + buttonGap;
+        if (m_repeatBtnRectItem) { m_repeatBtnRectItem->setRect(0, 0, repeatWpx, rowH); m_repeatBtnRectItem->setPos(x, 0); }
+        x += repeatWpx + buttonGap;
+        if (m_muteBtnRectItem) { m_muteBtnRectItem->setRect(0, 0, muteWpx, rowH); m_muteBtnRectItem->setPos(x, 0); }
+        x += muteWpx + buttonGap;
+        if (m_volumeBgRectItem) { m_volumeBgRectItem->setRect(0, 0, volumeWpx, rowH); m_volumeBgRectItem->setPos(x, 0); }
+        if (m_volumeFillRectItem) {
+            const qreal margin = 2.0;
+            qreal vol = m_audio ? std::clamp<qreal>(m_audio->volume(), 0.0, 1.0) : 0.0;
+            const qreal innerW = std::max<qreal>(0.0, volumeWpx - 2*margin);
+            m_volumeFillRectItem->setRect(margin, margin, innerW * vol, rowH - 2*margin);
         }
         if (m_progressBgRectItem) {
             // Second row, spans left to right under play button, with a gap
             m_progressBgRectItem->setRect(0, 0, progWpx, rowH);
             m_progressBgRectItem->setPos(0, rowH + gapPx);
         }
-        if (m_progressFillRectItem) {
+    if (m_progressFillRectItem) {
             qreal ratio = (m_durationMs > 0) ? (static_cast<qreal>(m_positionMs) / m_durationMs) : 0.0;
             ratio = std::clamp<qreal>(ratio, 0.0, 1.0);
             const qreal margin = 2.0;
             m_progressFillRectItem->setRect(margin, margin, (progWpx - 2*margin) * ratio, rowH - 2*margin);
         }
-        // Update play icon shape
+    // Update icon shapes and center them in their squares
         if (m_playIcon) {
             if (m_player && m_player->playbackState() == QMediaPlayer::PlayingState) {
                 // Pause icon: two bars
@@ -869,13 +1025,67 @@ private:
                 m_playIcon->setPath(t.map(path));
             }
         }
+        // Stop icon: square
+        if (m_stopIcon) {
+            qreal w = stopWpx, h = rowH;
+            QRectF sq(0, 0, w*0.5, h*0.5);
+            QPainterPath path; path.addRect(sq);
+            QRectF bb = path.boundingRect();
+            QPointF delta((w - bb.width())/2.0 - bb.left(), (h - bb.height())/2.0 - bb.top());
+            QTransform t; t.translate(delta.x(), delta.y());
+            m_stopIcon->setPath(t.map(path));
+        }
+        // Repeat icon: circular arrows
+        if (m_repeatIcon) {
+            qreal w = repeatWpx, h = rowH;
+            QPainterPath path;
+            QRectF r(w*0.18, h*0.18, w*0.64, h*0.64);
+            path.addEllipse(r);
+            // Add arrow heads (simplified)
+            QPolygonF a1; a1 << QPointF(r.right(), r.center().y()) << QPointF(r.right()-w*0.15, r.center().y()-h*0.08) << QPointF(r.right()-w*0.15, r.center().y()+h*0.08);
+            QPolygonF a2; a2 << QPointF(r.left(), r.center().y()) << QPointF(r.left()+w*0.15, r.center().y()-h*0.08) << QPointF(r.left()+w*0.15, r.center().y()+h*0.08);
+            path.addPolygon(a1); path.addPolygon(a2);
+            QRectF bb = path.boundingRect();
+            QPointF delta((w - bb.width())/2.0 - bb.left(), (h - bb.height())/2.0 - bb.top());
+            QTransform t; t.translate(delta.x(), delta.y());
+            m_repeatIcon->setPath(t.map(path));
+        }
+        // Mute icon: speaker with slash if muted
+        if (m_muteIcon) {
+            qreal w = muteWpx, h = rowH;
+            QPainterPath path;
+            QRectF box(w*0.2, h*0.35, w*0.2, h*0.3);
+            path.addRect(box);
+            QPolygonF horn; horn << QPointF(box.right(), box.top()) << QPointF(w*0.6, h*0.2) << QPointF(w*0.6, h*0.8) << QPointF(box.right(), box.bottom());
+            path.addPolygon(horn);
+            if (m_audio && m_audio->isMuted()) {
+                path.moveTo(w*0.2, h*0.2);
+                path.lineTo(w*0.8, h*0.8);
+            }
+            QRectF bb = path.boundingRect();
+            QPointF delta((w - bb.width())/2.0 - bb.left(), (h - bb.height())/2.0 - bb.top());
+            QTransform t; t.translate(delta.x(), delta.y());
+            m_muteIcon->setPath(t.map(path));
+        }
         // Store item-space rects for hit testing on the parent
         // Map viewport-space rectangles back to item coords
     QRectF playView(ctrlTopLeftView, QSizeF(playWpx, rowH));
+    QRectF stopView(ctrlTopLeftView + QPointF(playWpx + buttonGap, 0), QSizeF(stopWpx, rowH));
+    QRectF repeatView(ctrlTopLeftView + QPointF(playWpx + buttonGap + stopWpx + buttonGap, 0), QSizeF(repeatWpx, rowH));
+    QRectF muteView(ctrlTopLeftView + QPointF(playWpx + buttonGap + stopWpx + buttonGap + repeatWpx + buttonGap, 0), QSizeF(muteWpx, rowH));
+    QRectF volumeView(ctrlTopLeftView + QPointF(playWpx + buttonGap + stopWpx + buttonGap + repeatWpx + buttonGap + muteWpx + buttonGap, 0), QSizeF(volumeWpx, rowH));
     QRectF progView(ctrlTopLeftView + QPointF(0, rowH + gapPx), QSizeF(progWpx, rowH));
         QRectF playScene(v->mapToScene(playView.toRect()).boundingRect());
+    QRectF stopScene(v->mapToScene(stopView.toRect()).boundingRect());
+    QRectF repeatScene(v->mapToScene(repeatView.toRect()).boundingRect());
+    QRectF muteScene(v->mapToScene(muteView.toRect()).boundingRect());
+    QRectF volumeScene(v->mapToScene(volumeView.toRect()).boundingRect());
         QRectF progScene(v->mapToScene(progView.toRect()).boundingRect());
         m_playBtnRectItemCoords = mapFromScene(playScene).boundingRect();
+    m_stopBtnRectItemCoords = mapFromScene(stopScene).boundingRect();
+    m_repeatBtnRectItemCoords = mapFromScene(repeatScene).boundingRect();
+    m_muteBtnRectItemCoords = mapFromScene(muteScene).boundingRect();
+    m_volumeRectItemCoords = mapFromScene(volumeScene).boundingRect();
         m_progRectItemCoords = mapFromScene(progScene).boundingRect();
     }
     qreal baseWidth() const { return static_cast<qreal>(m_baseSize.width()); }
@@ -897,13 +1107,26 @@ private:
     QGraphicsRectItem* m_controlsBg = nullptr;
     QGraphicsRectItem* m_playBtnRectItem = nullptr;
     QGraphicsPathItem* m_playIcon = nullptr; // path supports both triangle and bars
+    QGraphicsRectItem* m_stopBtnRectItem = nullptr;
+    QGraphicsPathItem* m_stopIcon = nullptr;
+    QGraphicsRectItem* m_repeatBtnRectItem = nullptr;
+    QGraphicsPathItem* m_repeatIcon = nullptr;
+    QGraphicsRectItem* m_muteBtnRectItem = nullptr;
+    QGraphicsPathItem* m_muteIcon = nullptr;
+    QGraphicsRectItem* m_volumeBgRectItem = nullptr;
+    QGraphicsRectItem* m_volumeFillRectItem = nullptr;
     QGraphicsRectItem* m_progressBgRectItem = nullptr;
     QGraphicsRectItem* m_progressFillRectItem = nullptr;
     bool m_adoptedSize = false;
     qreal m_initialScaleFactor = 1.0;
     // Cached item-space rects for hit-testing
     QRectF m_playBtnRectItemCoords;
+    QRectF m_stopBtnRectItemCoords;
+    QRectF m_repeatBtnRectItemCoords;
+    QRectF m_muteBtnRectItemCoords;
+    QRectF m_volumeRectItemCoords;
     QRectF m_progRectItemCoords;
+    bool m_repeatEnabled = false;
 };
 
 MainWindow::MainWindow(QWidget *parent)
