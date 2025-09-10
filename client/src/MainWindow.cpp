@@ -19,6 +19,9 @@
 #include <QPaintEvent>
 #include <QGraphicsOpacityEffect>
 #include <QPropertyAnimation>
+#include <QVariantAnimation>
+#include <QTimer>
+#include <QEasingCurve>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QDragMoveEvent>
@@ -610,24 +613,48 @@ public:
                     if (m_player) m_player->play();
                 }
             }
-            if (s == QMediaPlayer::EndOfMedia) {
+        if (s == QMediaPlayer::EndOfMedia) {
                 if (m_repeatEnabled) {
+                    // Stop timer temporarily to prevent flickering during reset
+                    if (m_progressTimer) m_progressTimer->stop();
+                    // Reset progress instantly when repeating
+                    m_smoothProgressRatio = 0.0;
+                    updateProgressBar();
                     m_player->setPosition(0);
                     m_player->play();
+                    // Restart timer after a brief delay to ensure position is set
+                    QTimer::singleShot(10, [this]() {
+                        if (m_progressTimer && m_player && m_player->playbackState() == QMediaPlayer::PlayingState) {
+                            m_progressTimer->start();
+                        }
+                    });
                 } else {
                     // Keep showing the last frame and pin progress to 100%
                     m_holdLastFrameAtEnd = true;
-                    if (m_player) m_player->pause();
-                    if (m_durationMs > 0) m_positionMs = m_durationMs;
-                    updateControlsLayout();
-                    update();
+            if (m_durationMs > 0) m_positionMs = m_durationMs;
+            // Set progress to 100% instantly
+            m_smoothProgressRatio = 1.0;
+            updateProgressBar();
+            // Stop smooth progress timer when video ends
+            if (m_progressTimer) m_progressTimer->stop();
+            // Update controls immediately to reflect Play state without waiting for further signals
+            updateControlsLayout();
+            update();
+            if (m_player) m_player->pause();
                 }
             }
         });
     QObject::connect(m_player, &QMediaPlayer::durationChanged, [this](qint64 d){ m_durationMs = d; this->update(); });
     QObject::connect(m_player, &QMediaPlayer::positionChanged, [this](qint64 p){
         if (m_holdLastFrameAtEnd) return; // keep progress pinned at end until user action
-        m_positionMs = p; this->update();
+        m_positionMs = p; 
+        // Update progress directly for smooth real-time movement
+        if (!m_draggingProgress) {
+            qreal newRatio = (m_durationMs > 0) ? (static_cast<qreal>(p) / m_durationMs) : 0.0;
+            m_smoothProgressRatio = std::clamp<qreal>(newRatio, 0.0, 1.0);
+            updateProgressBar();
+        }
+        this->update();
     });
 
     // Controls overlays (ignore transforms so they stay in absolute pixels)
@@ -732,6 +759,23 @@ public:
     m_progressFillRectItem->setZValue(102.0);
     m_progressFillRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_progressFillRectItem->setAcceptedMouseButtons(Qt::NoButton);
+    
+    // Initialize smooth progress timer for real-time updates
+    m_progressTimer = new QTimer();
+    m_progressTimer->setInterval(16); // ~60fps updates for smooth progress
+    
+    // Connect timer to update progress smoothly during playback
+    QObject::connect(m_progressTimer, &QTimer::timeout, [this]() {
+        if (m_player && m_player->playbackState() == QMediaPlayer::PlayingState && 
+            !m_draggingProgress && !m_holdLastFrameAtEnd && m_durationMs > 0) {
+            // Calculate smooth progress based on current player position
+            qint64 currentPos = m_player->position();
+            qreal newRatio = static_cast<qreal>(currentPos) / m_durationMs;
+            m_smoothProgressRatio = std::clamp<qreal>(newRatio, 0.0, 1.0);
+            updateProgressBar();
+            this->update();
+        }
+    });
     // Controls are hidden by default (only visible when the item is selected)
     if (m_controlsBg) m_controlsBg->setVisible(false);
     if (m_playBtnRectItem) m_playBtnRectItem->setVisible(false);
@@ -755,8 +799,26 @@ public:
     }
     void togglePlayPause() {
         if (!m_player) return;
-    m_holdLastFrameAtEnd = false;
-        if (m_player->playbackState() == QMediaPlayer::PlayingState) m_player->pause(); else m_player->play();
+        if (m_player->playbackState() == QMediaPlayer::PlayingState) {
+            m_player->pause();
+            // Stop smooth progress timer when paused
+            if (m_progressTimer) m_progressTimer->stop();
+        } else {
+            // If we were holding the last frame, restart cleanly from the beginning
+            if (m_holdLastFrameAtEnd) {
+                m_holdLastFrameAtEnd = false;
+                m_positionMs = 0;
+                m_player->setPosition(0);
+                // Reset progress to 0
+                m_smoothProgressRatio = 0.0;
+                updateProgressBar();
+            }
+            m_player->play();
+            // Start smooth progress timer when playing
+            if (m_progressTimer) m_progressTimer->start();
+        }
+        updateControlsLayout();
+        update();
     }
     void stopToBeginning() {
         if (!m_player) return;
@@ -764,6 +826,10 @@ public:
         m_player->pause();
         m_player->setPosition(0);
     m_positionMs = 0;
+    // Reset progress and stop timer
+    m_smoothProgressRatio = 0.0;
+    updateProgressBar();
+    if (m_progressTimer) m_progressTimer->stop();
     updateControlsLayout();
     update();
     }
@@ -1181,14 +1247,24 @@ private:
             m_progressBgRectItem->setPos(0, rowH + gapPx);
         }
     if (m_progressFillRectItem) {
+        // Use the smoothly animated ratio instead of direct calculation
+        if (!m_draggingProgress) {
+            updateProgressBar(); // This uses m_smoothProgressRatio
+        } else {
+            // When dragging, update directly without animation
             qreal ratio = (m_durationMs > 0) ? (static_cast<qreal>(m_positionMs) / m_durationMs) : 0.0;
             ratio = std::clamp<qreal>(ratio, 0.0, 1.0);
             const qreal margin = 2.0;
             m_progressFillRectItem->setRect(margin, margin, (progWpx - 2*margin) * ratio, rowH - 2*margin);
         }
+    }
     // Update icon shapes and center them in their squares
         if (m_playIcon) {
-            if (m_player && m_player->playbackState() == QMediaPlayer::PlayingState) {
+            bool isPlaying = (m_player && m_player->playbackState() == QMediaPlayer::PlayingState);
+            // If we've reached end (holding last frame) or effectively at end without repeat, show Play immediately
+            if (m_holdLastFrameAtEnd) isPlaying = false;
+            if (!m_repeatEnabled && m_durationMs > 0 && (m_positionMs + 30 >= m_durationMs)) isPlaying = false; // epsilon
+            if (isPlaying) {
                 // Pause icon: two bars
                 qreal w = playWpx;
                 qreal h = rowH;
@@ -1373,6 +1449,27 @@ private:
     bool m_draggingVolume = false;
     // Hold last frame after EndOfMedia until next user action
     bool m_holdLastFrameAtEnd = false;
+    // Smooth progress animation
+    QTimer* m_progressTimer = nullptr;
+    qreal m_smoothProgressRatio = 0.0;
+public:
+    // Property for smooth progress animation
+    Q_PROPERTY(qreal smoothProgressRatio READ smoothProgressRatio WRITE setSmoothProgressRatio)
+    qreal smoothProgressRatio() const { return m_smoothProgressRatio; }
+    void setSmoothProgressRatio(qreal ratio) {
+        m_smoothProgressRatio = ratio;
+        updateProgressBar();
+    }
+private:
+    void updateProgressBar() {
+        if (!m_progressFillRectItem) return;
+        // Use animated ratio instead of direct position calculation
+        const qreal margin = 2.0;
+        const QRectF bgRect = m_progressBgRectItem ? m_progressBgRectItem->rect() : QRectF();
+        const qreal progWpx = bgRect.width();
+        const qreal rowH = bgRect.height();
+        m_progressFillRectItem->setRect(margin, margin, (progWpx - 2*margin) * m_smoothProgressRatio, rowH - 2*margin);
+    }
 };
 
 MainWindow::MainWindow(QWidget *parent)
