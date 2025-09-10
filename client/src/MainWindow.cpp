@@ -2624,27 +2624,21 @@ void MainWindow::createScreenViewPage() {
     // Match the dark background used by the client list container via palette(base)
     m_canvasContainer->setStyleSheet(
         "QWidget#CanvasContainer { "
+        "   background-color: palette(base); "
         "   border: 1px solid palette(mid); "
         "   border-radius: 5px; "
-        "   background-color: palette(base); "
-    "} "
-        // Ensure stacked pages inherit the same background to prevent light grey bleed
-    "QWidget#CanvasContainer > * { "
-    "   background-color: palette(base); "
-    "   border-radius: 5px; "
-    "}"
+        "}"
     );
     QVBoxLayout* containerLayout = new QVBoxLayout(m_canvasContainer);
-    // Leave a small margin so the rounded border is visible and not overdrawn by children
-    containerLayout->setContentsMargins(4,4,4,4);
+    // Provide real inner padding so child doesn't cover the border area
+    containerLayout->setContentsMargins(5,5,5,5);
     containerLayout->setSpacing(0);
     m_canvasStack = new QStackedWidget();
-    // Rounded corners and border directly on the visible stack area
+    // Match client list container: base background, no border on inner stack
     m_canvasStack->setStyleSheet(
         "QStackedWidget { "
         "   background-color: palette(base); "
-        "   border: 1px solid palette(mid); "
-        "   border-radius: 5px; "
+        "   border: none; "
         "}"
     );
     containerLayout->addWidget(m_canvasStack);
@@ -2687,7 +2681,8 @@ void MainWindow::createScreenViewPage() {
     if (m_screenCanvas->viewport()) {
         m_screenCanvas->viewport()->setAttribute(Qt::WA_StyledBackground, true);
         m_screenCanvas->viewport()->setAutoFillBackground(true);
-        m_screenCanvas->viewport()->setStyleSheet("background-color: palette(base); border-radius: 5px;");
+        // No border on the viewport to avoid inner border effects
+        m_screenCanvas->viewport()->setStyleSheet("background-color: transparent; border: none;");
     }
     m_screenCanvas->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     // Ensure viewport repaints fully so opacity effect animates correctly
