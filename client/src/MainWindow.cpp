@@ -556,10 +556,12 @@ public:
         m_player->setVideoSink(m_sink);
         m_player->setSource(QUrl::fromLocalFile(filePath));
     // Size adoption will be handled from frames and metadata; no direct videoSizeChanged hookup to keep Qt compatibility
-        QObject::connect(m_sink, &QVideoSink::videoFrameChanged, [this](const QVideoFrame& f){
+    QObject::connect(m_sink, &QVideoSink::videoFrameChanged, [this](const QVideoFrame& f){
             // Only replace the cached frame when valid and not holding the last frame at end-of-media
             if (!m_holdLastFrameAtEnd && f.isValid()) {
                 m_lastFrame = f;
+        QImage img = f.toImage();
+        if (!img.isNull()) m_lastFrameImage = img.convertToFormat(QImage::Format_ARGB32_Premultiplied);
                 maybeAdoptFrameSize(f);
                 // If we primed playback to grab the first frame, pause immediately and restore audio state
                 if (m_primingFirstFrame && !m_firstFramePrimed) {
@@ -652,6 +654,7 @@ public:
     });
 
     // Controls overlays (ignore transforms so they stay in absolute pixels)
+    // Create as child first, then reparent to scene for scale-invariant positioning
     m_controlsBg = new QGraphicsRectItem(this);
     m_controlsBg->setPen(Qt::NoPen);
     // Keep container transparent; draw backgrounds on child rects so play is a square, progress is full-width
@@ -659,6 +662,7 @@ public:
     m_controlsBg->setZValue(100.0);
     m_controlsBg->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_controlsBg->setAcceptedMouseButtons(Qt::NoButton);
+    // Keep as child of the video item so positioning uses item coordinates
 
     m_playBtnRectItem = new RoundedRectItem(m_controlsBg);
     m_playBtnRectItem->setPen(Qt::NoPen);
@@ -926,22 +930,22 @@ public:
     }
     void paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget* widget) override {
         Q_UNUSED(option); Q_UNUSED(widget);
+    // Keep controls anchored during zoom/pan like the filename label
+    // (cheap layout: rect/pos math + lightweight SVG placement)
+    updateControlsLayout();
         // Draw current frame; otherwise if available, draw poster image; avoid black placeholder to prevent flicker
         QRectF br(0,0, baseWidth(), baseHeight());
-        if (m_lastFrame.isValid()) {
+        if (!m_lastFrameImage.isNull()) {
+            painter->drawImage(br, m_lastFrameImage);
+        } else if (m_lastFrame.isValid()) {
+            // One-time fallback if cache not yet populated
             QImage img = m_lastFrame.toImage();
-            if (!img.isNull()) {
-                painter->drawImage(br, img);
-            } else if (m_posterImageSet && !m_posterImage.isNull()) {
-                // Fallback if conversion failed for some reason
-                painter->drawImage(br, m_posterImage);
-            }
+            if (!img.isNull()) painter->drawImage(br, img);
+            else if (m_posterImageSet && !m_posterImage.isNull()) painter->drawImage(br, m_posterImage);
         } else if (m_posterImageSet && !m_posterImage.isNull()) {
             painter->drawImage(br, m_posterImage);
         }
-    // Pause icon visibility is controlled in updateControlsLayout and setControlsVisible
-        // Update floating controls overlay (only relevant when selected)
-    if (isSelected()) updateControlsLayout();
+    // Pause icon visibility is controlled elsewhere; avoid layout work during paint
         // Selection/handles and label
         paintSelectionAndLabel(painter);
     }
@@ -1174,22 +1178,22 @@ private:
         if (!scene() || scene()->views().isEmpty()) return;
         if (!isSelected()) return; // layout only needed when visible
         QGraphicsView* v = scene()->views().first();
-    // Heights based on filename label height, or explicit override
-    const int padYpx = 4;
-    const int gapPx = 8;
-    const int overrideH = ResizableMediaBase::getHeightOfMediaOverlaysPx();
-    const qreal labelBgH = (m_labelBg ? m_labelBg->rect().height() : 0.0);
-    const int fallbackH = (m_labelText ? static_cast<int>(std::round(m_labelText->boundingRect().height())) + 2*padYpx : 24);
-    const int rowH = (overrideH > 0) ? overrideH : (labelBgH > 0 ? static_cast<int>(std::round(labelBgH)) : fallbackH);
-    const int totalWpx = 260; // absolute width for controls overlay
-    const int playWpx = rowH; // square button width equals height
-    // Top row: play, stop, repeat, mute, then volume slider filling the rest, with gaps between buttons
-    const int stopWpx = rowH;
-    const int repeatWpx = rowH;
-    const int muteWpx = rowH;
-    const int buttonGap = gapPx; // horizontal gap between buttons equals outer/inner gap
-    const int volumeWpx = std::max(0, totalWpx - (playWpx + stopWpx + repeatWpx + muteWpx) - buttonGap * 4);
-    const int progWpx = totalWpx; // progress spans full width on second row
+        // Heights based on filename label height, or explicit override
+        const int padYpx = 4;
+        const int gapPx = 8;
+        const int overrideH = ResizableMediaBase::getHeightOfMediaOverlaysPx();
+        const qreal labelBgH = (m_labelBg ? m_labelBg->rect().height() : 0.0);
+        const int fallbackH = (m_labelText ? static_cast<int>(std::round(m_labelText->boundingRect().height())) + 2*padYpx : 24);
+        const int rowHpx = (overrideH > 0) ? overrideH : (labelBgH > 0 ? static_cast<int>(std::round(labelBgH)) : fallbackH);
+        const int totalWpx = 260; // absolute width for controls overlay
+        const int playWpx = rowHpx; // square button width equals height
+        // Top row: play, stop, repeat, mute, then volume slider filling the rest, with gaps between buttons
+        const int stopWpx = rowHpx;
+        const int repeatWpx = rowHpx;
+        const int muteWpx = rowHpx;
+        const int buttonGapPx = gapPx; // horizontal gap between buttons equals outer/inner gap
+        const int volumeWpx = std::max(0, totalWpx - (playWpx + stopWpx + repeatWpx + muteWpx) - buttonGapPx * 4);
+        const int progWpx = totalWpx; // progress spans full width on second row
 
         // Active-state tinting: slightly blue-tinted version of label background
         auto baseBrush = (m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
@@ -1202,77 +1206,80 @@ private:
         };
         const QColor accentBlue(74, 144, 226, 255);
         const qreal tintStrength = 0.33; // subtle blue
-        // Compute base color from brush (assume solid); fallback used otherwise
         QColor baseColor = baseBrush.color().isValid() ? baseBrush.color() : QColor(0,0,0,160);
         QBrush activeBrush(blendColor(baseColor, accentBlue, tintStrength));
 
-        // Compute bottom-center of video in viewport coords
-        QPointF bottomCenterItem(baseWidth()/2.0, baseHeight());
-        QPointF bottomCenterScene = mapToScene(bottomCenterItem);
-        QPointF bottomCenterView = v->mapFromScene(bottomCenterScene);
-        // Desired top-left of controls in viewport (pixels)
-        QPointF ctrlTopLeftView = bottomCenterView + QPointF(-totalWpx/2.0, gapPx);
-        // Map back to item coordinates and set positions
-        QPointF ctrlTopLeftScene = v->mapToScene(ctrlTopLeftView.toPoint());
+        // Anchor: compute top-left of controls in item coordinates by using view-space mapping
+        // Use the same approach as filename label for consistent behavior
+        QPointF bottomCenterItem(baseWidth() / 2.0, baseHeight());
+    QPointF bottomCenterScene = mapToScene(bottomCenterItem);
+    // Map scene->viewport with full precision (avoid QPoint rounding)
+    QPointF bottomCenterView = v->viewportTransform().map(bottomCenterScene);
+    // Desired top-left of controls in viewport (pixels) - position below video with gap
+    QPointF ctrlTopLeftView = bottomCenterView + QPointF(-totalWpx / 2.0, gapPx);
+    // Map back to item coords using inverse viewport transform (preserve sub-pixel precision)
+    QPointF ctrlTopLeftScene = v->viewportTransform().inverted().map(ctrlTopLeftView);
         QPointF ctrlTopLeftItem = mapFromScene(ctrlTopLeftScene);
+
+        // Background tall enough to hold two rows (play above, progress below) with inner gap
         if (m_controlsBg) {
-            // Background tall enough to hold two rows (play above, progress below) with inner gap
-            m_controlsBg->setRect(0, 0, totalWpx, rowH * 2 + gapPx);
+            m_controlsBg->setRect(0, 0, totalWpx, rowHpx * 2 + gapPx);
             m_controlsBg->setPos(ctrlTopLeftItem);
         }
-        // Compute x-positions with uniform gaps
-        int x0 = 0;
-        int x1 = x0 + playWpx + buttonGap;
-        int x2 = x1 + stopWpx + buttonGap;
-        int x3 = x2 + repeatWpx + buttonGap;
-        int x4 = x3 + muteWpx + buttonGap;
+
+        // Compute x-positions with uniform gaps (in the local px space of m_controlsBg)
+        const qreal x0 = 0;
+        const qreal x1 = x0 + playWpx + buttonGapPx;
+        const qreal x2 = x1 + stopWpx + buttonGapPx;
+        const qreal x3 = x2 + repeatWpx + buttonGapPx;
+        const qreal x4 = x3 + muteWpx + buttonGapPx;
+
         if (m_playBtnRectItem) {
-            m_playBtnRectItem->setRect(0, 0, playWpx, rowH); m_playBtnRectItem->setPos(x0, 0);
+            m_playBtnRectItem->setRect(0, 0, playWpx, rowHpx); m_playBtnRectItem->setPos(x0, 0);
             m_playBtnRectItem->setRadius(ResizableMediaBase::getCornerRadiusOfMediaOverlaysPx());
-            // keep default base brush
             m_playBtnRectItem->setBrush(baseBrush);
         }
         if (m_stopBtnRectItem) {
-            m_stopBtnRectItem->setRect(0, 0, stopWpx, rowH); m_stopBtnRectItem->setPos(x1, 0);
+            m_stopBtnRectItem->setRect(0, 0, stopWpx, rowHpx); m_stopBtnRectItem->setPos(x1, 0);
             m_stopBtnRectItem->setRadius(ResizableMediaBase::getCornerRadiusOfMediaOverlaysPx());
             m_stopBtnRectItem->setBrush(baseBrush);
         }
         if (m_repeatBtnRectItem) {
-            m_repeatBtnRectItem->setRect(0, 0, repeatWpx, rowH); m_repeatBtnRectItem->setPos(x2, 0);
+            m_repeatBtnRectItem->setRect(0, 0, repeatWpx, rowHpx); m_repeatBtnRectItem->setPos(x2, 0);
             m_repeatBtnRectItem->setRadius(ResizableMediaBase::getCornerRadiusOfMediaOverlaysPx());
             m_repeatBtnRectItem->setBrush(m_repeatEnabled ? activeBrush : baseBrush);
         }
         if (m_muteBtnRectItem) {
-            m_muteBtnRectItem->setRect(0, 0, muteWpx, rowH); m_muteBtnRectItem->setPos(x3, 0);
+            m_muteBtnRectItem->setRect(0, 0, muteWpx, rowHpx); m_muteBtnRectItem->setPos(x3, 0);
             m_muteBtnRectItem->setRadius(ResizableMediaBase::getCornerRadiusOfMediaOverlaysPx());
             bool muted = m_audio && m_audio->isMuted();
             m_muteBtnRectItem->setBrush(muted ? activeBrush : baseBrush);
         }
-        if (m_volumeBgRectItem) { m_volumeBgRectItem->setRect(0, 0, volumeWpx, rowH); m_volumeBgRectItem->setPos(x4, 0); }
+        if (m_volumeBgRectItem) { m_volumeBgRectItem->setRect(0, 0, volumeWpx, rowHpx); m_volumeBgRectItem->setPos(x4, 0); }
         if (m_volumeFillRectItem) {
             const qreal margin = 2.0;
             qreal vol = m_audio ? std::clamp<qreal>(m_audio->volume(), 0.0, 1.0) : 0.0;
             const qreal innerW = std::max<qreal>(0.0, volumeWpx - 2*margin);
-            m_volumeFillRectItem->setRect(margin, margin, innerW * vol, rowH - 2*margin);
+            m_volumeFillRectItem->setRect(margin, margin, innerW * vol, rowHpx - 2*margin);
         }
         if (m_progressBgRectItem) {
             // Second row, spans left to right under play button, with a gap
-            m_progressBgRectItem->setRect(0, 0, progWpx, rowH);
-            m_progressBgRectItem->setPos(0, rowH + gapPx);
+            m_progressBgRectItem->setRect(0, 0, progWpx, rowHpx);
+            m_progressBgRectItem->setPos(0, rowHpx + gapPx);
         }
-    if (m_progressFillRectItem) {
-        // Use the smoothly animated ratio instead of direct calculation
-        if (!m_draggingProgress) {
-            updateProgressBar(); // This uses m_smoothProgressRatio
-        } else {
-            // When dragging, update directly without animation
-            qreal ratio = (m_durationMs > 0) ? (static_cast<qreal>(m_positionMs) / m_durationMs) : 0.0;
-            ratio = std::clamp<qreal>(ratio, 0.0, 1.0);
-            const qreal margin = 2.0;
-            m_progressFillRectItem->setRect(margin, margin, (progWpx - 2*margin) * ratio, rowH - 2*margin);
+        if (m_progressFillRectItem) {
+            // Use the smoothly animated ratio instead of direct calculation
+            if (!m_draggingProgress) {
+                updateProgressBar(); // This uses m_smoothProgressRatio
+            } else {
+                qreal ratio = (m_durationMs > 0) ? (static_cast<qreal>(m_positionMs) / m_durationMs) : 0.0;
+                ratio = std::clamp<qreal>(ratio, 0.0, 1.0);
+                const qreal margin = 2.0;
+                m_progressFillRectItem->setRect(margin, margin, (progWpx - 2*margin) * ratio, rowHpx - 2*margin);
+            }
         }
-    }
-    // Update SVG icon placement, toggle variants
+
+        // Update SVG icon placement, toggle variants (target sizes are in local px of bg/buttons)
         auto placeSvg = [](QGraphicsSvgItem* svg, qreal targetW, qreal targetH) {
             if (!svg) return;
             QSizeF nat = svg->renderer() ? svg->renderer()->defaultSize() : QSizeF(24,24);
@@ -1284,48 +1291,46 @@ private:
             const qreal y = (targetH - nat.height()*scale) / 2.0;
             svg->setPos(x, y);
         };
-        // Play/pause toggle
         bool isPlaying = (m_player && m_player->playbackState() == QMediaPlayer::PlayingState);
         if (m_holdLastFrameAtEnd) isPlaying = false;
         if (!m_repeatEnabled && m_durationMs > 0 && (m_positionMs + 30 >= m_durationMs)) isPlaying = false;
         if (m_playIcon && m_pauseIcon) {
             m_playIcon->setVisible(!isPlaying);
             m_pauseIcon->setVisible(isPlaying);
-            placeSvg(m_playIcon, playWpx, rowH);
-            placeSvg(m_pauseIcon, playWpx, rowH);
+            placeSvg(m_playIcon, playWpx, rowHpx);
+            placeSvg(m_pauseIcon, playWpx, rowHpx);
         }
-        // Stop icon
-        placeSvg(m_stopIcon, stopWpx, rowH);
-        // Repeat icon (keep small visual)
-        placeSvg(m_repeatIcon, repeatWpx, rowH);
-        // Volume icons (toggle on mute)
+        placeSvg(m_stopIcon, stopWpx, rowHpx);
+        placeSvg(m_repeatIcon, repeatWpx, rowHpx);
         bool muted = m_audio && m_audio->isMuted();
         if (m_muteIcon && m_muteSlashIcon) {
             m_muteIcon->setVisible(!muted);
             m_muteSlashIcon->setVisible(muted);
-            placeSvg(m_muteIcon, muteWpx, rowH);
-            placeSvg(m_muteSlashIcon, muteWpx, rowH);
+            placeSvg(m_muteIcon, muteWpx, rowHpx);
+            placeSvg(m_muteSlashIcon, muteWpx, rowHpx);
         }
-        // Store item-space rects for hit testing on the parent
-        // Map viewport-space rectangles back to item coords
-    QRectF playView(ctrlTopLeftView, QSizeF(playWpx, rowH));
-    QRectF stopView(ctrlTopLeftView + QPointF(playWpx + buttonGap, 0), QSizeF(stopWpx, rowH));
-    QRectF repeatView(ctrlTopLeftView + QPointF(playWpx + buttonGap + stopWpx + buttonGap, 0), QSizeF(repeatWpx, rowH));
-    QRectF muteView(ctrlTopLeftView + QPointF(playWpx + buttonGap + stopWpx + buttonGap + repeatWpx + buttonGap, 0), QSizeF(muteWpx, rowH));
-    QRectF volumeView(ctrlTopLeftView + QPointF(playWpx + buttonGap + stopWpx + buttonGap + repeatWpx + buttonGap + muteWpx + buttonGap, 0), QSizeF(volumeWpx, rowH));
-    QRectF progView(ctrlTopLeftView + QPointF(0, rowH + gapPx), QSizeF(progWpx, rowH));
-        QRectF playScene(v->mapToScene(playView.toRect()).boundingRect());
-    QRectF stopScene(v->mapToScene(stopView.toRect()).boundingRect());
-    QRectF repeatScene(v->mapToScene(repeatView.toRect()).boundingRect());
-    QRectF muteScene(v->mapToScene(muteView.toRect()).boundingRect());
-    QRectF volumeScene(v->mapToScene(volumeView.toRect()).boundingRect());
-        QRectF progScene(v->mapToScene(progView.toRect()).boundingRect());
-        m_playBtnRectItemCoords = mapFromScene(playScene).boundingRect();
-    m_stopBtnRectItemCoords = mapFromScene(stopScene).boundingRect();
-    m_repeatBtnRectItemCoords = mapFromScene(repeatScene).boundingRect();
-    m_muteBtnRectItemCoords = mapFromScene(muteScene).boundingRect();
-    m_volumeRectItemCoords = mapFromScene(volumeScene).boundingRect();
-        m_progRectItemCoords = mapFromScene(progScene).boundingRect();
+
+        // Store item-space rects for hit testing (convert px extents to item units)
+        const qreal rowHItem = toItemLengthFromPixels(rowHpx);
+        const qreal playWItem = toItemLengthFromPixels(playWpx);
+        const qreal stopWItem = toItemLengthFromPixels(stopWpx);
+        const qreal repeatWItem = toItemLengthFromPixels(repeatWpx);
+        const qreal muteWItem = toItemLengthFromPixels(muteWpx);
+        const qreal volumeWItem = toItemLengthFromPixels(volumeWpx);
+        const qreal progWItem = toItemLengthFromPixels(progWpx);
+        const qreal gapItem = toItemLengthFromPixels(gapPx);
+        const qreal x0Item = toItemLengthFromPixels(static_cast<int>(std::round(x0)));
+        const qreal x1Item = toItemLengthFromPixels(static_cast<int>(std::round(x1)));
+        const qreal x2Item = toItemLengthFromPixels(static_cast<int>(std::round(x2)));
+        const qreal x3Item = toItemLengthFromPixels(static_cast<int>(std::round(x3)));
+        const qreal x4Item = toItemLengthFromPixels(static_cast<int>(std::round(x4)));
+        m_playBtnRectItemCoords   = QRectF(ctrlTopLeftItem.x() + x0Item, ctrlTopLeftItem.y() + 0,       playWItem,   rowHItem);
+        m_stopBtnRectItemCoords   = QRectF(ctrlTopLeftItem.x() + x1Item, ctrlTopLeftItem.y() + 0,       stopWItem,   rowHItem);
+        m_repeatBtnRectItemCoords = QRectF(ctrlTopLeftItem.x() + x2Item, ctrlTopLeftItem.y() + 0,       repeatWItem, rowHItem);
+        m_muteBtnRectItemCoords   = QRectF(ctrlTopLeftItem.x() + x3Item, ctrlTopLeftItem.y() + 0,       muteWItem,   rowHItem);
+        m_volumeRectItemCoords    = QRectF(ctrlTopLeftItem.x() + x4Item, ctrlTopLeftItem.y() + 0,       volumeWItem, rowHItem);
+        m_progRectItemCoords      = QRectF(ctrlTopLeftItem.x() + 0,      ctrlTopLeftItem.y() + rowHItem + gapItem,
+                                           progWItem, rowHItem);
     }
     qreal baseWidth() const { return static_cast<qreal>(m_baseSize.width()); }
     qreal baseHeight() const { return static_cast<qreal>(m_baseSize.height()); }
@@ -1333,6 +1338,7 @@ private:
     QAudioOutput* m_audio = nullptr;
     QVideoSink* m_sink = nullptr;
     QVideoFrame m_lastFrame;
+    QImage m_lastFrameImage;
     qint64 m_durationMs = 0;
     qint64 m_positionMs = 0;
     // First-frame priming state
@@ -2619,13 +2625,13 @@ void MainWindow::createScreenViewPage() {
         m_screenCanvas->viewport()->setStyleSheet("background-color: transparent; border: none;");
     }
     m_screenCanvas->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    // Ensure viewport repaints fully so opacity effect animates correctly
-    m_screenCanvas->setViewportUpdateMode(QGraphicsView::FullViewportUpdate);
+    // Use smarter update mode; we apply opacity to the page (not the viewport) to keep repaints cheap
+    m_screenCanvas->setViewportUpdateMode(QGraphicsView::SmartViewportUpdate);
     // Screens are not clickable; canvas supports panning and media placement
     canvasLayout->addWidget(m_screenCanvas);
-    // Canvas/content opacity effect & animation (apply to viewport for QGraphicsView)
-    m_canvasOpacity = new QGraphicsOpacityEffect(m_screenCanvas->viewport());
-    m_screenCanvas->viewport()->setGraphicsEffect(m_canvasOpacity);
+    // Canvas/content opacity effect & animation (apply to the page, not the QGraphicsView viewport to avoid heavy repaints)
+    m_canvasOpacity = new QGraphicsOpacityEffect(canvasPage);
+    canvasPage->setGraphicsEffect(m_canvasOpacity);
     m_canvasOpacity->setOpacity(0.0);
     m_canvasFade = new QPropertyAnimation(m_canvasOpacity, "opacity", this);
     m_canvasFade->setDuration(m_fadeDurationMs);
