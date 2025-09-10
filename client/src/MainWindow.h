@@ -39,6 +39,7 @@ QT_END_NAMESPACE
 class SpinnerWidget; // forward declaration for custom loading spinner
 class QGraphicsOpacityEffect;
 class QPropertyAnimation;
+class QProcess; // fwd decl to avoid including in header
 // using QStackedWidget for canvas container switching
 
 // Custom screen canvas widget with zoom and pan capabilities
@@ -152,6 +153,8 @@ private:
     QList<ScreenInfo> getLocalScreenInfo();
     QString getMachineName();
     QString getPlatformName();
+    // Returns last known system volume without blocking the UI thread.
+    // On macOS, updated asynchronously; on Windows, queried on demand.
     int getSystemVolumePercent();
     void setupVolumeMonitoring();
     void setupCursorMonitoring();
@@ -247,6 +250,13 @@ private:
     
     // Constants
     static const QString DEFAULT_SERVER_URL;
+    
+    // Volume monitoring (to avoid 1s spikes)
+    int m_cachedSystemVolume = -1;        // last known value (0-100), -1 unknown
+#ifdef Q_OS_MACOS
+    QProcess* m_volProc = nullptr;       // reused for async osascript calls
+    QTimer* m_volTimer = nullptr;        // polls in background
+#endif
 };
 
 #endif // MAINWINDOW_H

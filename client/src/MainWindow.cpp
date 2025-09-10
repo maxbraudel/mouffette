@@ -3121,19 +3121,13 @@ QString MainWindow::getPlatformName() {
 #endif
 }
 
-int MainWindow::getSystemVolumePercent() {
 #ifdef Q_OS_MACOS
-    // Query macOS system output volume (0-100) via AppleScript
-    QProcess proc;
-    proc.start("/usr/bin/osascript", {"-e", "output volume of (get volume settings)"});
-    if (!proc.waitForFinished(1000)) return -1;
-    QByteArray out = proc.readAllStandardOutput().trimmed();
-    bool ok = false;
-    int vol = QString::fromUtf8(out).toInt(&ok);
-    if (!ok) return -1;
-    vol = std::clamp(vol, 0, 100);
-    return vol;
+int MainWindow::getSystemVolumePercent() {
+    // Return cached value; updated asynchronously in setupVolumeMonitoring()
+    return m_cachedSystemVolume;
+}
 #elif defined(Q_OS_WIN)
+int MainWindow::getSystemVolumePercent() {
     // Use Windows Core Audio APIs (MMDevice + IAudioEndpointVolume)
     // Headers are included only on Windows builds.
     HRESULT hr;
@@ -3162,28 +3156,61 @@ int MainWindow::getSystemVolumePercent() {
     if (coInit) CoUninitialize();
     return result;
 #elif defined(Q_OS_LINUX)
+int MainWindow::getSystemVolumePercent() {
     return -1; // TODO: Implement via PulseAudio/PipeWire if needed
 #else
+int MainWindow::getSystemVolumePercent() {
     return -1;
-#endif
 }
+#endif
 
 void MainWindow::setupVolumeMonitoring() {
-    // Poll system volume and sync to server when it changes.
+#ifdef Q_OS_MACOS
+    // Asynchronous polling to avoid blocking the UI thread.
+    if (!m_volProc) {
+        m_volProc = new QProcess(this);
+        // No visible window; ensure fast exit
+        connect(m_volProc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
+                [this](int, QProcess::ExitStatus) {
+            const QByteArray out = m_volProc->readAllStandardOutput().trimmed();
+            bool ok = false;
+            int vol = QString::fromUtf8(out).toInt(&ok);
+            if (ok) {
+                vol = std::clamp(vol, 0, 100);
+                if (vol != m_cachedSystemVolume) {
+                    m_cachedSystemVolume = vol;
+                    if (m_webSocketClient->isConnected() && m_isWatched) {
+                        syncRegistration();
+                    }
+                }
+            }
+        });
+    }
+    if (!m_volTimer) {
+        m_volTimer = new QTimer(this);
+        m_volTimer->setInterval(1200); // ~1.2s cadence
+        connect(m_volTimer, &QTimer::timeout, this, [this]() {
+            if (m_volProc->state() == QProcess::NotRunning) {
+                m_volProc->start("/usr/bin/osascript", {"-e", "output volume of (get volume settings)"});
+            }
+        });
+        m_volTimer->start();
+    }
+#else
+    // Non-macOS: simple polling; Windows call is fast.
     QTimer* volTimer = new QTimer(this);
-    volTimer->setInterval(1200); // ~1.2s cadence
+    volTimer->setInterval(1200);
     connect(volTimer, &QTimer::timeout, this, [this]() {
-        static int last = -2; // sentinel distinct from unknown -1
         int v = getSystemVolumePercent();
-        if (v != last) {
-            last = v;
+        if (v != m_cachedSystemVolume) {
+            m_cachedSystemVolume = v;
             if (m_webSocketClient->isConnected() && m_isWatched) {
-                // Send update only when we're being watched
-                syncRegistration(); // includes volumePercent now
+                syncRegistration();
             }
         }
     });
     volTimer->start();
+#endif
 }
 
 void MainWindow::updateClientList(const QList<ClientInfo>& clients) {
