@@ -715,7 +715,10 @@ public:
         m_player->setPosition(0);
     }
     void toggleRepeat() {
-        m_repeatEnabled = !m_repeatEnabled;
+    m_repeatEnabled = !m_repeatEnabled;
+    // Refresh to update button background tint
+    updateControlsLayout();
+    update();
     }
     void toggleMute() {
         if (!m_audio) return;
@@ -963,6 +966,21 @@ private:
     const int volumeWpx = std::max(0, totalWpx - (playWpx + stopWpx + repeatWpx + muteWpx) - buttonGap * 4);
     const int progWpx = totalWpx; // progress spans full width on second row
 
+        // Active-state tinting: slightly blue-tinted version of label background
+        auto baseBrush = (m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
+        auto blendColor = [](const QColor& a, const QColor& b, qreal t){
+            auto clamp255 = [](int v){ return std::max(0, std::min(255, v)); };
+            int r = clamp255(static_cast<int>(std::round(a.red()   * (1.0 - t) + b.red()   * t)));
+            int g = clamp255(static_cast<int>(std::round(a.green() * (1.0 - t) + b.green() * t)));
+            int bch = clamp255(static_cast<int>(std::round(a.blue()  * (1.0 - t) + b.blue()  * t)));
+            return QColor(r, g, bch, a.alpha());
+        };
+        const QColor accentBlue(74, 144, 226, 255);
+        const qreal tintStrength = 0.33; // subtle blue
+        // Compute base color from brush (assume solid); fallback used otherwise
+        QColor baseColor = baseBrush.color().isValid() ? baseBrush.color() : QColor(0,0,0,160);
+        QBrush activeBrush(blendColor(baseColor, accentBlue, tintStrength));
+
         // Compute bottom-center of video in viewport coords
         QPointF bottomCenterItem(baseWidth()/2.0, baseHeight());
         QPointF bottomCenterScene = mapToScene(bottomCenterItem);
@@ -977,16 +995,31 @@ private:
             m_controlsBg->setRect(0, 0, totalWpx, rowH * 2 + gapPx);
             m_controlsBg->setPos(ctrlTopLeftItem);
         }
-        qreal x = 0;
-        if (m_playBtnRectItem) { m_playBtnRectItem->setRect(0, 0, playWpx, rowH); m_playBtnRectItem->setPos(x, 0); }
-        x += playWpx + buttonGap;
-        if (m_stopBtnRectItem) { m_stopBtnRectItem->setRect(0, 0, stopWpx, rowH); m_stopBtnRectItem->setPos(x, 0); }
-        x += stopWpx + buttonGap;
-        if (m_repeatBtnRectItem) { m_repeatBtnRectItem->setRect(0, 0, repeatWpx, rowH); m_repeatBtnRectItem->setPos(x, 0); }
-        x += repeatWpx + buttonGap;
-        if (m_muteBtnRectItem) { m_muteBtnRectItem->setRect(0, 0, muteWpx, rowH); m_muteBtnRectItem->setPos(x, 0); }
-        x += muteWpx + buttonGap;
-        if (m_volumeBgRectItem) { m_volumeBgRectItem->setRect(0, 0, volumeWpx, rowH); m_volumeBgRectItem->setPos(x, 0); }
+        // Compute x-positions with uniform gaps
+        int x0 = 0;
+        int x1 = x0 + playWpx + buttonGap;
+        int x2 = x1 + stopWpx + buttonGap;
+        int x3 = x2 + repeatWpx + buttonGap;
+        int x4 = x3 + muteWpx + buttonGap;
+        if (m_playBtnRectItem) {
+            m_playBtnRectItem->setRect(0, 0, playWpx, rowH); m_playBtnRectItem->setPos(x0, 0);
+            // keep default base brush
+            m_playBtnRectItem->setBrush(baseBrush);
+        }
+        if (m_stopBtnRectItem) {
+            m_stopBtnRectItem->setRect(0, 0, stopWpx, rowH); m_stopBtnRectItem->setPos(x1, 0);
+            m_stopBtnRectItem->setBrush(baseBrush);
+        }
+        if (m_repeatBtnRectItem) {
+            m_repeatBtnRectItem->setRect(0, 0, repeatWpx, rowH); m_repeatBtnRectItem->setPos(x2, 0);
+            m_repeatBtnRectItem->setBrush(m_repeatEnabled ? activeBrush : baseBrush);
+        }
+        if (m_muteBtnRectItem) {
+            m_muteBtnRectItem->setRect(0, 0, muteWpx, rowH); m_muteBtnRectItem->setPos(x3, 0);
+            bool muted = m_audio && m_audio->isMuted();
+            m_muteBtnRectItem->setBrush(muted ? activeBrush : baseBrush);
+        }
+        if (m_volumeBgRectItem) { m_volumeBgRectItem->setRect(0, 0, volumeWpx, rowH); m_volumeBgRectItem->setPos(x4, 0); }
         if (m_volumeFillRectItem) {
             const qreal margin = 2.0;
             qreal vol = m_audio ? std::clamp<qreal>(m_audio->volume(), 0.0, 1.0) : 0.0;
@@ -1057,12 +1090,14 @@ private:
             qreal thick = std::max<qreal>(1.0, h * 0.12);
             qreal startDeg = 30.0;   // start angle (deg)
             qreal spanDeg  = 300.0;  // sweep almost full circle
-            qreal endDeg   = startDeg + spanDeg;
+            qreal trimDeg  = -8.0;    // trim to avoid overshoot under the arrowhead
+            qreal effSpan  = spanDeg - trimDeg;
+            qreal endDeg   = startDeg + effSpan;
             QRectF circleRect(cx - r, cy - r, 2*r, 2*r);
             // Thin arc path
             QPainterPath arc;
             arc.arcMoveTo(circleRect, startDeg);
-            arc.arcTo(circleRect, startDeg, spanDeg);
+            arc.arcTo(circleRect, startDeg, effSpan);
             // Thicken arc to a filled ring segment
             QPainterPathStroker stroker;
             stroker.setWidth(thick);
