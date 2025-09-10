@@ -28,6 +28,7 @@
 #include <QPinchGesture>
 #include <QScrollBar>
 #include <QStackedWidget>
+#include <QElapsedTimer>
 #include "WebSocketClient.h"
 #include "ClientInfo.h"
 
@@ -92,6 +93,8 @@ private:
     bool m_ignorePanMomentum = false;     // active when we just centered
     bool m_momentumPrimed = false;        // first delta captured as baseline
     double m_lastMomentumMag = 0.0;       // last observed |delta| magnitude
+    QPoint m_lastMomentumDelta;           // last observed raw delta vector
+    QElapsedTimer m_momentumTimer;        // time since suppression was (re)started
     // Remote cursor overlay
     QGraphicsEllipseItem* m_remoteCursorDot = nullptr;
     // Unified scale factor used to lay out screens and to scale dropped media (scene pixels per device pixel)

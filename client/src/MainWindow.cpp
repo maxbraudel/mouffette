@@ -2030,6 +2030,8 @@ void ScreenCanvas::recenterWithMargin(int marginPx) {
     m_ignorePanMomentum = true;
     m_momentumPrimed = false;
     m_lastMomentumMag = 0.0;
+    m_lastMomentumDelta = QPoint(0, 0);
+    m_momentumTimer.restart();
 }
 
 void ScreenCanvas::keyPressEvent(QKeyEvent* event) {
@@ -2381,25 +2383,66 @@ void ScreenCanvas::wheelEvent(QWheelEvent* event) {
         delta = event->angleDelta() / 8; // small scaling for smoother feel
     }
     if (!delta.isNull()) {
-        // Momentum suppression: after recenter, ignore decreasing inertial deltas
+        // Momentum suppression: after recenter, ignore decaying inertial deltas robustly
         if (m_ignorePanMomentum) {
-            // Use Manhattan length for magnitude (direction-agnostic); on macOS trackpad it's smooth
-            const double mag = std::abs(delta.x()) + std::abs(delta.y());
-            if (!m_momentumPrimed) {
-                // First observed delta after centering becomes the baseline
-                m_momentumPrimed = true;
-                m_lastMomentumMag = mag;
-                event->accept();
-                return; // ignore this one as well (cut motion immediately)
-            } else {
-                if (mag <= m_lastMomentumMag + 1e-6) {
-                    // Still decaying or equal: keep ignoring
-                    m_lastMomentumMag = mag;
+            // If the platform provides scroll phase, end suppression on a new phase begin
+#if QT_VERSION >= QT_VERSION_CHECK(6, 3, 0)
+            if (event->phase() == Qt::ScrollUpdate && !m_momentumPrimed) {
+                // still within the same fling; keep suppression
+            }
+            if (event->phase() == Qt::ScrollBegin) {
+                // New gesture explicitly began
+                m_ignorePanMomentum = false;
+            }
+            if (!m_ignorePanMomentum) {
+                // process normally
+            } else
+#endif
+            {
+                // Hysteresis thresholds
+                const double noiseGate = 1.0;   // ignore tiny bumps
+                const double boostRatio = 1.25; // require 25% increase to consider momentum ended
+                const qint64 graceMs = 180;     // ignore everything for a short time after recenter
+                const qint64 elapsed = m_momentumTimer.isValid() ? m_momentumTimer.elapsed() : LLONG_MAX;
+
+                // Use Manhattan length for magnitude; direction-agnostic
+                const double mag = std::abs(delta.x()) + std::abs(delta.y());
+                if (elapsed < graceMs) {
+                    // Short time gate immediately after centering
                     event->accept();
                     return;
                 }
-                // Momentum ended (increase detected) -> stop suppression and process normally
-                m_ignorePanMomentum = false;
+                if (mag <= noiseGate) {
+                    // Ignore tiny jitter
+                    event->accept();
+                    return;
+                }
+                if (!m_momentumPrimed) {
+                    // First observed delta after centering becomes the baseline and direction
+                    m_momentumPrimed = true;
+                    m_lastMomentumMag = mag;
+                    m_lastMomentumDelta = delta;
+                    event->accept();
+                    return; // cut immediately
+                } else {
+                    // If direction stays the same and magnitude does not significantly increase, keep ignoring
+                    const bool sameDir = (m_lastMomentumDelta.x() == 0 || (delta.x() == 0) || (std::signbit(m_lastMomentumDelta.x()) == std::signbit(delta.x()))) &&
+                                         (m_lastMomentumDelta.y() == 0 || (delta.y() == 0) || (std::signbit(m_lastMomentumDelta.y()) == std::signbit(delta.y())));
+                    if (sameDir) {
+                        if (mag <= m_lastMomentumMag * boostRatio) {
+                            // still decaying or not enough increase: continue suppressing
+                            m_lastMomentumMag = mag; // track new mag so we continue to follow the decay
+                            m_lastMomentumDelta = delta;
+                            event->accept();
+                            return;
+                        }
+                        // Significant boost in same direction -> consider it a new intentional scroll; end suppression
+                        m_ignorePanMomentum = false;
+                    } else {
+                        // Direction changed (user reversed) -> end suppression immediately to honor the user's input
+                        m_ignorePanMomentum = false;
+                    }
+                }
             }
         }
         horizontalScrollBar()->setValue(horizontalScrollBar()->value() - delta.x());
