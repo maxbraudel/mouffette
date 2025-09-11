@@ -95,6 +95,8 @@ private:
     bool m_panning;
     QPoint m_lastPanPoint;
     QPoint m_lastMousePos;
+    // If an overlay (controls) handled the mouse press, swallow the full click sequence
+    bool m_overlayMouseDown = false;
     // macOS: track native pinch session to avoid handling two-finger scroll simultaneously
     bool m_nativePinchActive = false;
     QTimer* m_nativePinchGuardTimer = nullptr;

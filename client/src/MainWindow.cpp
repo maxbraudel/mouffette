@@ -2622,6 +2622,21 @@ bool ScreenCanvas::gestureEvent(QGestureEvent* event) {
 
 void ScreenCanvas::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
+        // Priority 0: forward to controls of currently selected videos before any other handling
+        if (m_scene) {
+            const QPointF scenePosEarly = mapToScene(event->pos());
+            const QList<QGraphicsItem*> selEarly = m_scene->selectedItems();
+            for (QGraphicsItem* it : selEarly) {
+                if (auto* v = dynamic_cast<ResizableVideoItem*>(it)) {
+                    const QPointF itemPos = v->mapFromScene(scenePosEarly);
+                    if (v->handleControlsPressAtItemPos(itemPos)) {
+                        m_overlayMouseDown = true; // consume subsequent release as well
+                        event->accept();
+                        return;
+                    }
+                }
+            }
+        }
         // Try to start resize on the topmost media item whose handle contains the point
         // BUT only if the item is already selected
         const QPointF scenePos = mapToScene(event->pos());
@@ -2701,6 +2716,21 @@ void ScreenCanvas::mousePressEvent(QMouseEvent* event) {
 
 void ScreenCanvas::mouseDoubleClickEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
+        if (m_scene) {
+            const QPointF scenePosSel = mapToScene(event->pos());
+            const QList<QGraphicsItem*> sel = m_scene->selectedItems();
+            for (QGraphicsItem* it : sel) {
+                if (auto* v = dynamic_cast<ResizableVideoItem*>(it)) {
+                    const QPointF itemPos = v->mapFromScene(scenePosSel);
+                    if (v->handleControlsPressAtItemPos(itemPos)) {
+                        // Swallow the remainder of this double-click sequence (final release)
+                        m_overlayMouseDown = true;
+                        event->accept();
+                        return;
+                    }
+                }
+            }
+        }
         const QPointF scenePos = mapToScene(event->pos());
         const QList<QGraphicsItem*> hitItems = items(event->pos());
         auto toMedia = [](QGraphicsItem* x)->ResizableMediaBase* {
@@ -2728,6 +2758,7 @@ void ScreenCanvas::mouseDoubleClickEvent(QMouseEvent* event) {
 }
 
 void ScreenCanvas::mouseMoveEvent(QMouseEvent* event) {
+    if (m_overlayMouseDown) { event->accept(); return; }
     // Track last mouse pos in viewport coords (used for zoom anchoring)
     m_lastMousePos = event->pos();
     
@@ -2795,6 +2826,12 @@ void ScreenCanvas::mouseMoveEvent(QMouseEvent* event) {
 
 void ScreenCanvas::mouseReleaseEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
+        // If overlay consumed the press, swallow the release, too
+        if (m_overlayMouseDown) {
+            m_overlayMouseDown = false;
+            event->accept();
+            return;
+        }
         // Finalize any active drag on selected video controls
         for (QGraphicsItem* it : m_scene->items()) {
             if (auto* v = dynamic_cast<ResizableVideoItem*>(it)) {
