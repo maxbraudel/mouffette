@@ -77,6 +77,14 @@
 
 const QString MainWindow::DEFAULT_SERVER_URL = "ws://192.168.0.188:8080";
 
+// Z-ordering constants used throughout the scene
+namespace {
+constexpr qreal Z_SCREENS = -1000.0;
+constexpr qreal Z_MEDIA_BASE = 1.0;
+constexpr qreal Z_REMOTE_CURSOR = 10000.0;
+constexpr qreal Z_SCENE_OVERLAY = 12000.0; // above all scene content
+}
+
 // Ensure all fade animations respect the configured duration
 void MainWindow::applyAnimationDurations() {
     if (m_spinnerFade) m_spinnerFade->setDuration(m_loaderFadeDurationMs);
@@ -221,12 +229,12 @@ public:
     m_labelBg->setPen(Qt::NoPen);
     // Unified translucent dark background used by label and video controls
     m_labelBg->setBrush(QColor(0, 0, 0, 160));
-        m_labelBg->setZValue(9000.0); // keep overlays above media
+    m_labelBg->setZValue(Z_SCENE_OVERLAY); // keep overlays above media
         m_labelBg->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
         m_labelBg->setAcceptedMouseButtons(Qt::NoButton);
         m_labelText = new QGraphicsTextItem(m_filename, m_labelBg);
         m_labelText->setDefaultTextColor(Qt::white);
-        m_labelText->setZValue(9001.0);
+    m_labelText->setZValue(Z_SCENE_OVERLAY + 1);
         m_labelText->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
         m_labelText->setAcceptedMouseButtons(Qt::NoButton);
         updateLabelLayout();
@@ -540,13 +548,8 @@ protected:
             m_labelBg->setParentItem(nullptr);
             if (scene() && !m_labelBg->scene()) scene()->addItem(m_labelBg);
         }
-        // Ensure the overlay is a top-level scene item so its Z-order is global
-        if (m_labelBg->parentItem() != nullptr) {
-            m_labelBg->setParentItem(nullptr);
-            if (scene() && !m_labelBg->scene()) scene()->addItem(m_labelBg);
-        }
         // Raise above everything when visible
-        m_labelBg->setZValue(12000.0);
+    m_labelBg->setZValue(Z_SCENE_OVERLAY);
         // Parent top-center in viewport coords
         QPointF topCenterItem(m_baseSize.width()/2.0, 0.0);
         QPointF topCenterScene = mapToScene(topCenterItem);
@@ -587,6 +590,7 @@ public:
 private:
     QPixmap m_pix;
 };
+
 
 // Video media implementation: renders current frame and overlays controls
 class ResizableVideoItem : public ResizableMediaBase {
@@ -713,7 +717,7 @@ public:
     m_controlsBg->setPen(Qt::NoPen);
     // Keep container transparent; draw backgrounds on child rects so play is a square, progress is full-width
     m_controlsBg->setBrush(Qt::NoBrush);
-    m_controlsBg->setZValue(9000.0);
+    m_controlsBg->setZValue(Z_SCENE_OVERLAY);
     m_controlsBg->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_controlsBg->setAcceptedMouseButtons(Qt::NoButton);
     m_controlsBg->setOpacity(0.0);
@@ -724,16 +728,16 @@ public:
     m_playBtnRectItem->setPen(Qt::NoPen);
     // Square background for the play button, same as filename label
     m_playBtnRectItem->setBrush(m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
-    m_playBtnRectItem->setZValue(9001.0);
+    m_playBtnRectItem->setZValue(Z_SCENE_OVERLAY + 1);
     m_playBtnRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_playBtnRectItem->setAcceptedMouseButtons(Qt::NoButton);
 
     m_playIcon = new QGraphicsSvgItem(":/icons/icons/play.svg", m_playBtnRectItem);
-    m_playIcon->setZValue(9002.0);
+    m_playIcon->setZValue(Z_SCENE_OVERLAY + 2);
     m_playIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_playIcon->setAcceptedMouseButtons(Qt::NoButton);
     m_pauseIcon = new QGraphicsSvgItem(":/icons/icons/pause.svg", m_playBtnRectItem);
-    m_pauseIcon->setZValue(9002.0);
+    m_pauseIcon->setZValue(Z_SCENE_OVERLAY + 2);
     m_pauseIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_pauseIcon->setAcceptedMouseButtons(Qt::NoButton);
     m_pauseIcon->setVisible(false);
@@ -742,11 +746,11 @@ public:
     m_stopBtnRectItem = new RoundedRectItem(m_controlsBg);
     m_stopBtnRectItem->setPen(Qt::NoPen);
     m_stopBtnRectItem->setBrush(m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
-    m_stopBtnRectItem->setZValue(9001.0);
+    m_stopBtnRectItem->setZValue(Z_SCENE_OVERLAY + 1);
     m_stopBtnRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_stopBtnRectItem->setAcceptedMouseButtons(Qt::NoButton);
     m_stopIcon = new QGraphicsSvgItem(":/icons/icons/stop.svg", m_stopBtnRectItem);
-    m_stopIcon->setZValue(9002.0);
+    m_stopIcon->setZValue(Z_SCENE_OVERLAY + 2);
     m_stopIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_stopIcon->setAcceptedMouseButtons(Qt::NoButton);
 
@@ -754,11 +758,11 @@ public:
     m_repeatBtnRectItem = new RoundedRectItem(m_controlsBg);
     m_repeatBtnRectItem->setPen(Qt::NoPen);
     m_repeatBtnRectItem->setBrush(m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
-    m_repeatBtnRectItem->setZValue(9001.0);
+    m_repeatBtnRectItem->setZValue(Z_SCENE_OVERLAY + 1);
     m_repeatBtnRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_repeatBtnRectItem->setAcceptedMouseButtons(Qt::NoButton);
     m_repeatIcon = new QGraphicsSvgItem(":/icons/icons/loop.svg", m_repeatBtnRectItem);
-    m_repeatIcon->setZValue(9002.0);
+    m_repeatIcon->setZValue(Z_SCENE_OVERLAY + 2);
     m_repeatIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_repeatIcon->setAcceptedMouseButtons(Qt::NoButton);
 
@@ -766,16 +770,16 @@ public:
     m_muteBtnRectItem = new RoundedRectItem(m_controlsBg);
     m_muteBtnRectItem->setPen(Qt::NoPen);
     m_muteBtnRectItem->setBrush(m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
-    m_muteBtnRectItem->setZValue(9001.0);
+    m_muteBtnRectItem->setZValue(Z_SCENE_OVERLAY + 1);
     m_muteBtnRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_muteBtnRectItem->setAcceptedMouseButtons(Qt::NoButton);
     m_muteIcon = new QGraphicsSvgItem(":/icons/icons/volume-on.svg", m_muteBtnRectItem);
-    m_muteIcon->setZValue(9002.0);
+    m_muteIcon->setZValue(Z_SCENE_OVERLAY + 2);
     m_muteIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_muteIcon->setAcceptedMouseButtons(Qt::NoButton);
     // volume-off asset shown when muted
     m_muteSlashIcon = new QGraphicsSvgItem(":/icons/icons/volume-off.svg", m_muteBtnRectItem);
-    m_muteSlashIcon->setZValue(9002.0);
+    m_muteSlashIcon->setZValue(Z_SCENE_OVERLAY + 2);
     m_muteSlashIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_muteSlashIcon->setAcceptedMouseButtons(Qt::NoButton);
 
@@ -783,13 +787,13 @@ public:
     m_volumeBgRectItem = new QGraphicsRectItem(m_controlsBg);
     m_volumeBgRectItem->setPen(Qt::NoPen);
     m_volumeBgRectItem->setBrush(m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
-    m_volumeBgRectItem->setZValue(9001.0);
+    m_volumeBgRectItem->setZValue(Z_SCENE_OVERLAY + 1);
     m_volumeBgRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_volumeBgRectItem->setAcceptedMouseButtons(Qt::NoButton);
     m_volumeFillRectItem = new QGraphicsRectItem(m_volumeBgRectItem);
     m_volumeFillRectItem->setPen(Qt::NoPen);
     m_volumeFillRectItem->setBrush(QColor(74,144,226));
-    m_volumeFillRectItem->setZValue(9002.0);
+    m_volumeFillRectItem->setZValue(Z_SCENE_OVERLAY + 2);
     m_volumeFillRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_volumeFillRectItem->setAcceptedMouseButtons(Qt::NoButton);
 
@@ -797,7 +801,7 @@ public:
     m_progressBgRectItem->setPen(Qt::NoPen);
     // Full-width background for the progress row, same as filename label
     m_progressBgRectItem->setBrush(m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
-    m_progressBgRectItem->setZValue(9001.0);
+    m_progressBgRectItem->setZValue(Z_SCENE_OVERLAY + 1);
     m_progressBgRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_progressBgRectItem->setAcceptedMouseButtons(Qt::NoButton);
 
@@ -805,7 +809,7 @@ public:
     m_progressFillRectItem->setPen(Qt::NoPen);
     // Progress fill uses the primary accent color; keep solid for readability over translucent bg
     m_progressFillRectItem->setBrush(QColor(74,144,226));
-    m_progressFillRectItem->setZValue(9002.0);
+    m_progressFillRectItem->setZValue(Z_SCENE_OVERLAY + 2);
     m_progressFillRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_progressFillRectItem->setAcceptedMouseButtons(Qt::NoButton);
     
@@ -985,7 +989,7 @@ public:
         }
     }
     // Public helper to refresh overlay positions when the view transform changes
-    void requestOverlayRelayout() { updateControlsLayout(); update(); }
+    void requestOverlayRelayout() { updateControlsLayout(); }
     // Expose a helper for view-level control handling
     bool handleControlsPressAtItemPos(const QPointF& itemPos) {
         if (!isSelected()) return false;
@@ -1013,7 +1017,7 @@ public:
             qreal r = (itemPos.x() - m_volumeRectItemCoords.left()) / m_volumeRectItemCoords.width();
             r = std::clamp<qreal>(r, 0.0, 1.0);
             if (m_audio) m_audio->setVolume(r);
-            updateControlsLayout(); update();
+            updateControlsLayout();
             // Begin drag-to-volume
             m_draggingVolume = true;
             grabMouse();
@@ -1143,7 +1147,7 @@ public:
             qreal r = (event->pos().x() - m_volumeRectItemCoords.left()) / m_volumeRectItemCoords.width();
             r = std::clamp<qreal>(r, 0.0, 1.0);
             if (m_audio) m_audio->setVolume(r);
-            updateControlsLayout(); update();
+            updateControlsLayout();
             m_draggingVolume = true;
             grabMouse();
             event->accept();
@@ -1192,19 +1196,6 @@ public:
     }
 protected:
     QVariant itemChange(GraphicsItemChange change, const QVariant &value) override {
-        if (change == ItemSceneChange) {
-            // When removed from a scene, temporarily hide overlay to avoid dangling in old scene
-            if (value.value<QGraphicsScene*>() == nullptr) {
-                if (m_controlsBg) m_controlsBg->setVisible(false);
-            }
-        }
-        if (change == ItemSceneHasChanged) {
-            // Ensure controls overlay belongs to the new scene
-            if (scene() && m_controlsBg && m_controlsBg->scene() != scene()) {
-                if (m_controlsBg->scene()) m_controlsBg->scene()->removeItem(m_controlsBg);
-                scene()->addItem(m_controlsBg);
-            }
-        }
         if (change == ItemSceneChange) {
             // When removed from a scene, temporarily hide overlay to avoid dangling in old scene
             if (value.value<QGraphicsScene*>() == nullptr) {
@@ -1963,14 +1954,14 @@ void ScreenCanvas::hideRemoteCursor() {
 void ScreenCanvas::ensureZOrder() {
     // Put screens at a low Z, remote cursor very high, media in between
     for (QGraphicsRectItem* r : m_screenItems) {
-        if (r) r->setZValue(-1000.0);
+        if (r) r->setZValue(Z_SCREENS);
     }
-    if (m_remoteCursorDot) m_remoteCursorDot->setZValue(10000.0);
+    if (m_remoteCursorDot) m_remoteCursorDot->setZValue(Z_REMOTE_CURSOR);
     if (!m_scene) return;
     // Normalize media base Z so overlays (set to ~9000) always win
     for (QGraphicsItem* it : m_scene->items()) {
         auto* media = dynamic_cast<ResizableMediaBase*>(it);
-        if (media) media->setZValue(1.0);
+    if (media) media->setZValue(Z_MEDIA_BASE);
     }
 }
 
