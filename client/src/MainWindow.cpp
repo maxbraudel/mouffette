@@ -230,11 +230,13 @@ public:
     // Unified translucent dark background used by label and video controls
     m_labelBg->setBrush(QColor(0, 0, 0, 160));
     m_labelBg->setZValue(Z_SCENE_OVERLAY); // keep overlays above media
+        m_labelBg->setCacheMode(QGraphicsItem::DeviceCoordinateCache);
         m_labelBg->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
         m_labelBg->setAcceptedMouseButtons(Qt::NoButton);
         m_labelText = new QGraphicsTextItem(m_filename, m_labelBg);
         m_labelText->setDefaultTextColor(Qt::white);
     m_labelText->setZValue(Z_SCENE_OVERLAY + 1);
+        m_labelText->setCacheMode(QGraphicsItem::DeviceCoordinateCache);
         m_labelText->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
         m_labelText->setAcceptedMouseButtons(Qt::NoButton);
         updateLabelLayout();
@@ -247,6 +249,8 @@ public:
     // Applies to: filename background, play/stop/repeat/mute buttons. Excludes: progress & volume bars.
     static void setCornerRadiusOfMediaOverlaysPx(int px) { cornerRadiusOfMediaOverlays = std::max(0, px); }
     static int getCornerRadiusOfMediaOverlaysPx() { return cornerRadiusOfMediaOverlays; }
+    // Public hook for view to relayout the filename label after pan/zoom
+    void requestLabelRelayout() { updateLabelLayout(); }
     // Utility for view: tell if a given item-space pos is on a resize handle
     bool isOnHandleAtItemPos(const QPointF& itemPos) const {
         return hitTestHandle(itemPos) != None;
@@ -333,9 +337,8 @@ public:
 protected:
     // Called during interactive geometry changes (resize/drag) so subclasses can re-layout overlays.
     virtual void onInteractiveGeometryChanged() {}
-    // Draw selection chrome and keep label positioned
+    // Draw selection chrome only; relayout happens on transform/position changes
     void paintSelectionAndLabel(QPainter* painter) {
-        updateLabelLayout();
         if (!isSelected()) return;
         QRectF br(0, 0, m_baseSize.width(), m_baseSize.height());
         painter->save();
@@ -719,12 +722,14 @@ public:
     m_controlsBg->setBrush(Qt::NoBrush);
     m_controlsBg->setZValue(Z_SCENE_OVERLAY);
     m_controlsBg->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+    m_controlsBg->setCacheMode(QGraphicsItem::DeviceCoordinateCache);
     m_controlsBg->setAcceptedMouseButtons(Qt::NoButton);
     m_controlsBg->setOpacity(0.0);
     // Keep as child of the video item so positioning uses item coordinates
     if (scene()) scene()->addItem(m_controlsBg);
 
     m_playBtnRectItem = new RoundedRectItem(m_controlsBg);
+    m_playBtnRectItem->setCacheMode(QGraphicsItem::DeviceCoordinateCache);
     m_playBtnRectItem->setPen(Qt::NoPen);
     // Square background for the play button, same as filename label
     m_playBtnRectItem->setBrush(m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
@@ -733,10 +738,12 @@ public:
     m_playBtnRectItem->setAcceptedMouseButtons(Qt::NoButton);
 
     m_playIcon = new QGraphicsSvgItem(":/icons/icons/play.svg", m_playBtnRectItem);
+    m_playIcon->setCacheMode(QGraphicsItem::DeviceCoordinateCache);
     m_playIcon->setZValue(Z_SCENE_OVERLAY + 2);
     m_playIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_playIcon->setAcceptedMouseButtons(Qt::NoButton);
     m_pauseIcon = new QGraphicsSvgItem(":/icons/icons/pause.svg", m_playBtnRectItem);
+    m_pauseIcon->setCacheMode(QGraphicsItem::DeviceCoordinateCache);
     m_pauseIcon->setZValue(Z_SCENE_OVERLAY + 2);
     m_pauseIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_pauseIcon->setAcceptedMouseButtons(Qt::NoButton);
@@ -744,47 +751,55 @@ public:
 
     // Stop button (top row, square)
     m_stopBtnRectItem = new RoundedRectItem(m_controlsBg);
+    m_stopBtnRectItem->setCacheMode(QGraphicsItem::DeviceCoordinateCache);
     m_stopBtnRectItem->setPen(Qt::NoPen);
     m_stopBtnRectItem->setBrush(m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
     m_stopBtnRectItem->setZValue(Z_SCENE_OVERLAY + 1);
     m_stopBtnRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_stopBtnRectItem->setAcceptedMouseButtons(Qt::NoButton);
     m_stopIcon = new QGraphicsSvgItem(":/icons/icons/stop.svg", m_stopBtnRectItem);
+    m_stopIcon->setCacheMode(QGraphicsItem::DeviceCoordinateCache);
     m_stopIcon->setZValue(Z_SCENE_OVERLAY + 2);
     m_stopIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_stopIcon->setAcceptedMouseButtons(Qt::NoButton);
 
     // Repeat toggle button (top row, square)
     m_repeatBtnRectItem = new RoundedRectItem(m_controlsBg);
+    m_repeatBtnRectItem->setCacheMode(QGraphicsItem::DeviceCoordinateCache);
     m_repeatBtnRectItem->setPen(Qt::NoPen);
     m_repeatBtnRectItem->setBrush(m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
     m_repeatBtnRectItem->setZValue(Z_SCENE_OVERLAY + 1);
     m_repeatBtnRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_repeatBtnRectItem->setAcceptedMouseButtons(Qt::NoButton);
     m_repeatIcon = new QGraphicsSvgItem(":/icons/icons/loop.svg", m_repeatBtnRectItem);
+    m_repeatIcon->setCacheMode(QGraphicsItem::DeviceCoordinateCache);
     m_repeatIcon->setZValue(Z_SCENE_OVERLAY + 2);
     m_repeatIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_repeatIcon->setAcceptedMouseButtons(Qt::NoButton);
 
     // Mute toggle button (top row, square)
     m_muteBtnRectItem = new RoundedRectItem(m_controlsBg);
+    m_muteBtnRectItem->setCacheMode(QGraphicsItem::DeviceCoordinateCache);
     m_muteBtnRectItem->setPen(Qt::NoPen);
     m_muteBtnRectItem->setBrush(m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
     m_muteBtnRectItem->setZValue(Z_SCENE_OVERLAY + 1);
     m_muteBtnRectItem->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_muteBtnRectItem->setAcceptedMouseButtons(Qt::NoButton);
     m_muteIcon = new QGraphicsSvgItem(":/icons/icons/volume-on.svg", m_muteBtnRectItem);
+    m_muteIcon->setCacheMode(QGraphicsItem::DeviceCoordinateCache);
     m_muteIcon->setZValue(Z_SCENE_OVERLAY + 2);
     m_muteIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_muteIcon->setAcceptedMouseButtons(Qt::NoButton);
     // volume-off asset shown when muted
     m_muteSlashIcon = new QGraphicsSvgItem(":/icons/icons/volume-off.svg", m_muteBtnRectItem);
+    m_muteSlashIcon->setCacheMode(QGraphicsItem::DeviceCoordinateCache);
     m_muteSlashIcon->setZValue(Z_SCENE_OVERLAY + 2);
     m_muteSlashIcon->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_muteSlashIcon->setAcceptedMouseButtons(Qt::NoButton);
 
     // Volume slider (top row, remaining width)
     m_volumeBgRectItem = new QGraphicsRectItem(m_controlsBg);
+    m_volumeBgRectItem->setCacheMode(QGraphicsItem::DeviceCoordinateCache);
     m_volumeBgRectItem->setPen(Qt::NoPen);
     m_volumeBgRectItem->setBrush(m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
     m_volumeBgRectItem->setZValue(Z_SCENE_OVERLAY + 1);
@@ -798,6 +813,7 @@ public:
     m_volumeFillRectItem->setAcceptedMouseButtons(Qt::NoButton);
 
     m_progressBgRectItem = new QGraphicsRectItem(m_controlsBg);
+    m_progressBgRectItem->setCacheMode(QGraphicsItem::DeviceCoordinateCache);
     m_progressBgRectItem->setPen(Qt::NoPen);
     // Full-width background for the progress row, same as filename label
     m_progressBgRectItem->setBrush(m_labelBg ? m_labelBg->brush() : QBrush(QColor(0,0,0,160)));
@@ -1968,7 +1984,8 @@ void ScreenCanvas::ensureZOrder() {
 void ScreenCanvas::setMediaHandleSelectionSizePx(int px) {
     m_mediaHandleSelectionSizePx = qMax(4, px);
     if (!m_scene) return;
-    for (QGraphicsItem* it : m_scene->items()) {
+    const QList<QGraphicsItem*> sel = m_scene->selectedItems();
+    for (QGraphicsItem* it : sel) {
         if (auto* rp = dynamic_cast<ResizablePixmapItem*>(it)) {
             rp->setHandleSelectionSize(m_mediaHandleSelectionSizePx);
         } else if (auto* rv = dynamic_cast<ResizableMediaBase*>(it)) {
@@ -1980,7 +1997,8 @@ void ScreenCanvas::setMediaHandleSelectionSizePx(int px) {
 void ScreenCanvas::setMediaHandleVisualSizePx(int px) {
     m_mediaHandleVisualSizePx = qMax(4, px);
     if (!m_scene) return;
-    for (QGraphicsItem* it : m_scene->items()) {
+    const QList<QGraphicsItem*> sel = m_scene->selectedItems();
+    for (QGraphicsItem* it : sel) {
         if (auto* rp = dynamic_cast<ResizablePixmapItem*>(it)) {
             rp->setHandleVisualSize(m_mediaHandleVisualSizePx);
         } else if (auto* rv = dynamic_cast<ResizableMediaBase*>(it)) {
@@ -2504,11 +2522,15 @@ void ScreenCanvas::recenterWithMargin(int marginPx) {
     t.scale(s, s);
     setTransform(t);
     centerOn(bounds.center());
-    // After recenter, refresh overlays so scene-level controls/labels re-anchor correctly
+    // After recenter, refresh overlays only for selected items (cheaper and sufficient)
     if (m_scene) {
-        for (QGraphicsItem* it : m_scene->items()) {
+        const QList<QGraphicsItem*> sel = m_scene->selectedItems();
+        for (QGraphicsItem* it : sel) {
             if (auto* v = dynamic_cast<ResizableVideoItem*>(it)) {
                 v->requestOverlayRelayout();
+            }
+            if (auto* b = dynamic_cast<ResizableMediaBase*>(it)) {
+                b->requestLabelRelayout();
             }
         }
     }
@@ -2605,7 +2627,8 @@ void ScreenCanvas::mousePressEvent(QMouseEvent* event) {
         const QPointF scenePos = mapToScene(event->pos());
         ResizableMediaBase* topHandleItem = nullptr;
         qreal topZ = -std::numeric_limits<qreal>::infinity();
-        for (QGraphicsItem* it : m_scene->items()) {
+    const QList<QGraphicsItem*> sel = m_scene ? m_scene->selectedItems() : QList<QGraphicsItem*>();
+    for (QGraphicsItem* it : sel) {
             if (auto* rp = dynamic_cast<ResizableMediaBase*>(it)) {
                 // Only allow resize if item is selected
                 if (rp->isSelected() && rp->isOnHandleAtItemPos(rp->mapFromScene(scenePos))) {
@@ -2715,9 +2738,10 @@ void ScreenCanvas::mouseMoveEvent(QMouseEvent* event) {
     Qt::CursorShape resizeCursor = Qt::ArrowCursor;
     bool onResizeHandle = false;
     
-    // Check all media items for handle hover (prioritize topmost, only if selected)
+    // Check only selected media items for handle hover (prioritize topmost)
     qreal topZ = -std::numeric_limits<qreal>::infinity();
-    for (QGraphicsItem* it : m_scene->items()) {
+    const QList<QGraphicsItem*> sel = m_scene ? m_scene->selectedItems() : QList<QGraphicsItem*>();
+    for (QGraphicsItem* it : sel) {
         if (auto* rp = dynamic_cast<ResizableMediaBase*>(it)) {
             // Only show resize cursor if the item is selected
             if (rp->isSelected() && rp->zValue() >= topZ) {
@@ -2741,7 +2765,7 @@ void ScreenCanvas::mouseMoveEvent(QMouseEvent* event) {
     // Handle dragging and panning logic
     if (event->buttons() & Qt::LeftButton) {
         // If a selected video is currently dragging its sliders, update it even if cursor left its shape
-        for (QGraphicsItem* it : m_scene->items()) {
+    for (QGraphicsItem* it : sel) {
             if (auto* v = dynamic_cast<ResizableVideoItem*>(it)) {
                 if (v->isSelected() && (v->isDraggingProgress() || v->isDraggingVolume())) {
                     v->updateDragWithScenePos(mapToScene(event->pos()));
@@ -2951,11 +2975,15 @@ void ScreenCanvas::zoomAroundViewportPos(const QPointF& vpPosF, qreal factor) {
     t.scale(factor, factor);
     t.translate(-sceneAnchor.x(), -sceneAnchor.y());
     setTransform(t);
-    // After zoom, refresh overlays so their scene positions re-anchor under media
+    // After zoom, refresh overlays only for selected items
     if (m_scene) {
-        for (QGraphicsItem* it : m_scene->items()) {
+        const QList<QGraphicsItem*> sel = m_scene->selectedItems();
+        for (QGraphicsItem* it : sel) {
             if (auto* v = dynamic_cast<ResizableVideoItem*>(it)) {
                 v->requestOverlayRelayout();
+            }
+            if (auto* b = dynamic_cast<ResizableMediaBase*>(it)) {
+                b->requestLabelRelayout();
             }
         }
     }
