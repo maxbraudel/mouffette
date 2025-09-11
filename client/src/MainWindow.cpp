@@ -2758,7 +2758,24 @@ void ScreenCanvas::mouseDoubleClickEvent(QMouseEvent* event) {
 }
 
 void ScreenCanvas::mouseMoveEvent(QMouseEvent* event) {
-    if (m_overlayMouseDown) { event->accept(); return; }
+    if (m_overlayMouseDown) {
+        // If an overlay initiated the interaction, forward moves to any dragging sliders
+        if (m_scene) {
+            const QList<QGraphicsItem*> sel = m_scene->selectedItems();
+            for (QGraphicsItem* it : sel) {
+                if (auto* v = dynamic_cast<ResizableVideoItem*>(it)) {
+                    if (v->isDraggingProgress() || v->isDraggingVolume()) {
+                        v->updateDragWithScenePos(mapToScene(event->pos()));
+                        event->accept();
+                        return;
+                    }
+                }
+            }
+        }
+        // Not a drag-type overlay; just swallow move
+        event->accept();
+        return;
+    }
     // Track last mouse pos in viewport coords (used for zoom anchoring)
     m_lastMousePos = event->pos();
     
@@ -2826,8 +2843,18 @@ void ScreenCanvas::mouseMoveEvent(QMouseEvent* event) {
 
 void ScreenCanvas::mouseReleaseEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
-        // If overlay consumed the press, swallow the release, too
+        // If overlay consumed the press, finish any active slider drag and swallow release
         if (m_overlayMouseDown) {
+            if (m_scene) {
+                const QList<QGraphicsItem*> sel = m_scene->selectedItems();
+                for (QGraphicsItem* it : sel) {
+                    if (auto* v = dynamic_cast<ResizableVideoItem*>(it)) {
+                        if (v->isDraggingProgress() || v->isDraggingVolume()) {
+                            v->endDrag();
+                        }
+                    }
+                }
+            }
             m_overlayMouseDown = false;
             event->accept();
             return;
