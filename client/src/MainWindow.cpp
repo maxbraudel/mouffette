@@ -2504,6 +2504,14 @@ void ScreenCanvas::recenterWithMargin(int marginPx) {
     t.scale(s, s);
     setTransform(t);
     centerOn(bounds.center());
+    // After recenter, refresh overlays so scene-level controls/labels re-anchor correctly
+    if (m_scene) {
+        for (QGraphicsItem* it : m_scene->items()) {
+            if (auto* v = dynamic_cast<ResizableVideoItem*>(it)) {
+                v->requestOverlayRelayout();
+            }
+        }
+    }
     // Start momentum suppression: ignore decaying inertial scroll deltas until an increase occurs
     m_ignorePanMomentum = true;
     m_momentumPrimed = false;
