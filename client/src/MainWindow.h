@@ -58,6 +58,8 @@ public:
     void recenterWithMargin(int marginPx = 33);
     // Configure fade-in duration (ms) for drag preview appearance
     void setDragPreviewFadeDurationMs(int ms) { m_dragPreviewFadeMs = qMax(0, ms); }
+    // Configure fade-in duration (ms) for video controls when they appear
+    void setVideoControlsFadeDurationMs(int ms) { m_videoControlsFadeMs = qMax(0, ms); }
     // Remote cursor visualization
     void updateRemoteCursor(int globalX, int globalY);
     void hideRemoteCursor();
@@ -122,6 +124,8 @@ private:
     int m_dragPreviewFadeMs = 180; // configurable duration in milliseconds
     class QVariantAnimation* m_dragPreviewFadeAnim = nullptr; // forward-declared type
     qreal m_dragPreviewTargetOpacity = 0.85; // final opacity during drag
+    // Fade-in for video controls
+    int m_videoControlsFadeMs = 140; // configurable duration in milliseconds
     // Live video thumbnail probe
     QMediaPlayer* m_dragPreviewPlayer = nullptr;
     QVideoSink* m_dragPreviewSink = nullptr;

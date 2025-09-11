@@ -20,6 +20,7 @@
 #include <QGraphicsOpacityEffect>
 #include <QPropertyAnimation>
 #include <QVariantAnimation>
+#include <QEasingCurve>
 #include <QTimer>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -553,9 +554,10 @@ private:
 // Video media implementation: renders current frame and overlays controls
 class ResizableVideoItem : public ResizableMediaBase {
 public:
-    explicit ResizableVideoItem(const QString& filePath, int visualSizePx, int selectionSizePx, const QString& filename = QString())
+    explicit ResizableVideoItem(const QString& filePath, int visualSizePx, int selectionSizePx, const QString& filename = QString(), int controlsFadeMs = 140)
         : ResizableMediaBase(QSize(640,360), visualSizePx, selectionSizePx, filename)
     {
+        m_controlsFadeMs = std::max(0, controlsFadeMs);
         m_player = new QMediaPlayer();
         m_audio = new QAudioOutput();
         m_sink = new QVideoSink();
@@ -581,6 +583,7 @@ public:
                     if (m_audio) m_audio->setMuted(m_savedMuted);
                     // Unlock controls now that the video is ready
                     m_controlsLockedUntilReady = false;
+                    m_controlsDidInitialFade = false; // next show should fade once
                     if (isSelected()) {
                         setControlsVisible(true);
                         updateControlsLayout();
@@ -676,6 +679,7 @@ public:
     m_controlsBg->setZValue(100.0);
     m_controlsBg->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
     m_controlsBg->setAcceptedMouseButtons(Qt::NoButton);
+    m_controlsBg->setOpacity(0.0);
     // Keep as child of the video item so positioning uses item coordinates
 
     m_playBtnRectItem = new RoundedRectItem(m_controlsBg);
@@ -786,6 +790,7 @@ public:
     // Controls are hidden by default (only visible when the item is selected)
     // Lock controls until video is ready (first frame primed)
     m_controlsLockedUntilReady = true;
+    m_controlsDidInitialFade = false;
     if (m_controlsBg) m_controlsBg->setVisible(false);
     if (m_playBtnRectItem) m_playBtnRectItem->setVisible(false);
     if (m_playIcon) m_playIcon->setVisible(false);
@@ -805,7 +810,8 @@ public:
     ~ResizableVideoItem() override {
     if (m_player) QObject::disconnect(m_player, nullptr, nullptr, nullptr);
     if (m_sink) QObject::disconnect(m_sink, nullptr, nullptr, nullptr);
-        delete m_player; delete m_audio; delete m_sink;
+    delete m_controlsFadeAnim;
+    delete m_player; delete m_audio; delete m_sink;
     }
     void togglePlayPause() {
         if (!m_player) return;
@@ -1212,21 +1218,52 @@ private:
     }
     void setControlsVisible(bool show) {
         const bool allow = show && !m_controlsLockedUntilReady;
-        if (m_controlsBg) m_controlsBg->setVisible(allow);
-        if (m_playBtnRectItem) m_playBtnRectItem->setVisible(allow);
-        if (m_playIcon) m_playIcon->setVisible(allow && !(m_player && m_player->playbackState() == QMediaPlayer::PlayingState));
-        if (m_pauseIcon) m_pauseIcon->setVisible(allow &&  (m_player && m_player->playbackState() == QMediaPlayer::PlayingState));
-        if (m_stopBtnRectItem) m_stopBtnRectItem->setVisible(allow);
-        if (m_stopIcon) m_stopIcon->setVisible(allow);
-        if (m_repeatBtnRectItem) m_repeatBtnRectItem->setVisible(allow);
-        if (m_repeatIcon) m_repeatIcon->setVisible(allow);
-        if (m_muteBtnRectItem) m_muteBtnRectItem->setVisible(allow);
-        if (m_muteIcon) m_muteIcon->setVisible(allow);
-        if (m_muteSlashIcon) m_muteSlashIcon->setVisible(allow && m_audio && m_audio->isMuted());
-        if (m_volumeBgRectItem) m_volumeBgRectItem->setVisible(allow);
-        if (m_volumeFillRectItem) m_volumeFillRectItem->setVisible(allow);
-        if (m_progressBgRectItem) m_progressBgRectItem->setVisible(allow);
-        if (m_progressFillRectItem) m_progressFillRectItem->setVisible(allow);
+        auto setChildrenVisible = [this](bool vis){
+            if (m_playBtnRectItem) m_playBtnRectItem->setVisible(vis);
+            if (m_playIcon) m_playIcon->setVisible(vis && !(m_player && m_player->playbackState() == QMediaPlayer::PlayingState));
+            if (m_pauseIcon) m_pauseIcon->setVisible(vis &&  (m_player && m_player->playbackState() == QMediaPlayer::PlayingState));
+            if (m_stopBtnRectItem) m_stopBtnRectItem->setVisible(vis);
+            if (m_stopIcon) m_stopIcon->setVisible(vis);
+            if (m_repeatBtnRectItem) m_repeatBtnRectItem->setVisible(vis);
+            if (m_repeatIcon) m_repeatIcon->setVisible(vis);
+            if (m_muteBtnRectItem) m_muteBtnRectItem->setVisible(vis);
+            if (m_muteIcon) m_muteIcon->setVisible(vis);
+            if (m_muteSlashIcon) m_muteSlashIcon->setVisible(vis && m_audio && m_audio->isMuted());
+            if (m_volumeBgRectItem) m_volumeBgRectItem->setVisible(vis);
+            if (m_volumeFillRectItem) m_volumeFillRectItem->setVisible(vis);
+            if (m_progressBgRectItem) m_progressBgRectItem->setVisible(vis);
+            if (m_progressFillRectItem) m_progressFillRectItem->setVisible(vis);
+        };
+    if (!m_controlsBg) return;
+        if (allow) {
+            m_controlsBg->setVisible(true);
+            setChildrenVisible(true);
+            // Fade only the first time the controls become visible after unlock
+            if (!m_controlsDidInitialFade) {
+                if (!m_controlsFadeAnim) {
+                    m_controlsFadeAnim = new QVariantAnimation();
+                    m_controlsFadeAnim->setEasingCurve(QEasingCurve::OutCubic);
+                    QObject::connect(m_controlsFadeAnim, &QVariantAnimation::valueChanged, [this](const QVariant& v){
+                        if (m_controlsBg) m_controlsBg->setOpacity(v.toReal());
+                    });
+                }
+                m_controlsFadeAnim->stop();
+                m_controlsFadeAnim->setDuration(m_controlsFadeMs);
+                m_controlsFadeAnim->setStartValue(0.0);
+                m_controlsFadeAnim->setEndValue(1.0);
+                m_controlsDidInitialFade = true; // ensure subsequent shows are instant
+                m_controlsFadeAnim->start();
+            } else {
+                if (m_controlsFadeAnim) m_controlsFadeAnim->stop();
+                m_controlsBg->setOpacity(1.0);
+            }
+        } else {
+            if (m_controlsFadeAnim) m_controlsFadeAnim->stop();
+            m_controlsBg->setOpacity(0.0);
+            m_controlsBg->setVisible(false);
+            setChildrenVisible(false);
+            // Keep m_controlsDidInitialFade as-is so next selection show is instant
+        }
     }
     void updateControlsLayout() {
         if (!scene() || scene()->views().isEmpty()) return;
@@ -1441,6 +1478,10 @@ private:
     bool m_seeking = false;
     // Hide/disable controls until first frame is primed
     bool m_controlsLockedUntilReady = true;
+    // Controls fade animation config/state
+    int m_controlsFadeMs = 140;
+    QVariantAnimation* m_controlsFadeAnim = nullptr;
+    bool m_controlsDidInitialFade = false;
 
 private:
     void updateProgressBar() {
@@ -1942,7 +1983,7 @@ void ScreenCanvas::dropEvent(QDropEvent* event) {
         static const QSet<QString> kVideoExts = {"mp4","mov","m4v","avi","mkv","webm"};
         if (kVideoExts.contains(ext)) {
             // Create with placeholder logical size; adopt real size on first frame
-            auto* vitem = new ResizableVideoItem(droppedPath, m_mediaHandleVisualSizePx, m_mediaHandleSelectionSizePx, filename);
+            auto* vitem = new ResizableVideoItem(droppedPath, m_mediaHandleVisualSizePx, m_mediaHandleSelectionSizePx, filename, m_videoControlsFadeMs);
             vitem->setInitialScaleFactor(m_scaleFactor);
             // Start with a neutral 1.0 scale on placeholder size and center approx.
             vitem->setScale(m_scaleFactor);
