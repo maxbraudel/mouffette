@@ -53,6 +53,8 @@ public:
 
     // Move to dedicated thread
     void moveToWorkerThread();
+    // Request a single decoded frame (poster) without starting playback
+    void requestFirstFrame();
 
 signals:
     // Emitted from worker thread (use Qt::QueuedConnection)
@@ -107,6 +109,8 @@ private:
     // Playback timing reference (system ms and video ms) for accurate synchronization
     qint64 m_playbackStartSystemMs = 0;
     qint64 m_playbackStartVideoMs = 0;
+    // One-shot request to decode a single frame for poster/preview without starting playback
+    std::atomic<bool> m_serveOneFrame{false};
 
     // Helper methods (worker thread only)
     bool openFile(const QString& filePath);

@@ -55,6 +55,18 @@ void FFmpegVideoDecoder::moveToWorkerThread()
     m_workerThread->start();
 }
 
+void FFmpegVideoDecoder::requestFirstFrame()
+{
+    // Thread-safe flag to request a single frame to be decoded and emitted
+    if (QThread::currentThread() == m_workerThread) {
+        m_serveOneFrame.store(true);
+        // kick the processing loop
+        QMetaObject::invokeMethod(this, &FFmpegVideoDecoder::processFrame, Qt::QueuedConnection);
+    } else {
+        QMetaObject::invokeMethod(this, [this]() { requestFirstFrame(); }, Qt::QueuedConnection);
+    }
+}
+
 void FFmpegVideoDecoder::setSource(const QString& filePath)
 {
     QMutexLocker locker(&m_commandMutex);
@@ -425,13 +437,35 @@ void FFmpegVideoDecoder::processFrame()
                  << "frameInterval:" << m_frameInterval << "ms";
     }
     
-    // Allow one frame when not playing (for preview/poster), otherwise enforce playing state
-    static bool firstFrameShown = false;
-    if (!firstFrameShown) {
-        firstFrameShown = true;
-        // Start playback after showing first frame
-        updatePlaybackState(PlaybackState::Playing);
-    } else if (m_playbackState != PlaybackState::Playing) {
+    // One-shot poster request: if requested, decode and emit a single frame then stop
+    if (m_serveOneFrame.load()) {
+        // Decode next available frame and emit it, but do not start playback
+        bool posterEmitted = false;
+        AVPacket* pkt = av_packet_alloc();
+        if (!pkt) return;
+        while (av_read_frame(m_formatContext, pkt) >= 0) {
+            if (pkt->stream_index != m_videoStreamIndex) { av_packet_unref(pkt); continue; }
+            if (avcodec_send_packet(m_codecContext, pkt) < 0) { av_packet_unref(pkt); continue; }
+            if (avcodec_receive_frame(m_codecContext, m_frame) == 0) {
+                QImage image = convertFrameToQImage(m_frame);
+                if (!image.isNull()) {
+                    qint64 timestamp = getFrameTimestampMs(m_frame);
+                    m_position.store(timestamp);
+                    emit frameReady(image, timestamp);
+                    emit positionChanged(timestamp);
+                    posterEmitted = true;
+                }
+            }
+            av_packet_unref(pkt);
+            if (posterEmitted) break;
+        }
+        av_packet_free(&pkt);
+        m_serveOneFrame.store(false);
+        return;
+    }
+
+    // If not playing, skip normal processing
+    if (m_playbackState != PlaybackState::Playing) {
         return;
     }
 

@@ -649,9 +649,9 @@ public:
         m_decoder->moveToWorkerThread();
         m_decoder->setSource(filePath);
 
-    // Auto-start playback so dropped videos begin decoding frames immediately
+    // By default do not autoplay on drop. Request first frame (poster) only.
     m_primingFirstFrame = true;
-    m_decoder->play();
+    m_decoder->requestFirstFrame();
 
         // Connect decoder frame signal to the same processing pipeline
     QObject::connect(m_decoder, &FFmpegVideoDecoder::frameReady, qApp, [this](const QImage& image, qint64 timestamp){
@@ -869,7 +869,11 @@ public:
     // Connect FFmpeg decoder signals
     if (m_decoder) {
     QObject::connect(m_decoder, &FFmpegVideoDecoder::durationChanged, qApp, [this](qint64 d){
+            // New file duration arrived: reset UI progress to start
             m_durationMs = d;
+            m_positionMs = 0;
+            m_smoothProgressRatio = 0.0;
+            updateProgressBar();
             this->update();
     }, Qt::QueuedConnection);
 
@@ -881,23 +885,36 @@ public:
     QObject::connect(m_decoder, &FFmpegVideoDecoder::playbackStateChanged, qApp, [this](FFmpegVideoDecoder::PlaybackState s){
             // When playback stops due to EOF, handle repeat/hold
             if (s == FFmpegVideoDecoder::PlaybackState::Stopped) {
-                if (m_repeatEnabled) {
+                // Only treat Stopped as end-of-file if position is at or very near duration
+                const qint64 nearEpsilon = 200; // ms tolerance
+                bool atEnd = (m_durationMs > 0) && (m_positionMs >= (m_durationMs - nearEpsilon));
+                if (atEnd) {
+                    if (m_repeatEnabled) {
+                        if (m_progressTimer) m_progressTimer->stop();
+                        m_smoothProgressRatio = 0.0;
+                        updateProgressBar();
+                        m_decoder->setPosition(0);
+                        m_decoder->play();
+                        QTimer::singleShot(10, [this]() {
+                            if (m_progressTimer && m_decoder && m_decoder->playbackState() == FFmpegVideoDecoder::PlaybackState::Playing) {
+                                m_progressTimer->start();
+                            }
+                        });
+                    } else {
+                        m_holdLastFrameAtEnd = true;
+                        if (m_durationMs > 0) m_positionMs = m_durationMs;
+                        m_smoothProgressRatio = 1.0;
+                        updateProgressBar();
+                        if (m_progressTimer) m_progressTimer->stop();
+                        updateControlsLayout();
+                        update();
+                    }
+                } else {
+                    // Not EOF: likely initial stopped state from opening file — ensure UI shows start
+                    m_holdLastFrameAtEnd = false;
                     if (m_progressTimer) m_progressTimer->stop();
                     m_smoothProgressRatio = 0.0;
                     updateProgressBar();
-                    m_decoder->setPosition(0);
-                    m_decoder->play();
-                    QTimer::singleShot(10, [this]() {
-                        if (m_progressTimer && m_decoder && m_decoder->playbackState() == FFmpegVideoDecoder::PlaybackState::Playing) {
-                            m_progressTimer->start();
-                        }
-                    });
-                } else {
-                    m_holdLastFrameAtEnd = true;
-                    if (m_durationMs > 0) m_positionMs = m_durationMs;
-                    m_smoothProgressRatio = 1.0;
-                    updateProgressBar();
-                    if (m_progressTimer) m_progressTimer->stop();
                     updateControlsLayout();
                     update();
                 }
