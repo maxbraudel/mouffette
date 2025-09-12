@@ -835,6 +835,7 @@ public:
             qint64 currentPos = m_positionMs;
             qreal newRatio = static_cast<qreal>(currentPos) / m_durationMs;
             m_smoothProgressRatio = std::clamp<qreal>(newRatio, 0.0, 1.0);
+            qDebug() << "UI progress timer: pos=" << currentPos << "dur=" << m_durationMs << "ratio=" << m_smoothProgressRatio;
             updateProgressBar();
             this->update();
         }
@@ -870,6 +871,7 @@ public:
             m_durationMs = d;
             m_positionMs = 0;
             m_smoothProgressRatio = 0.0;
+            qDebug() << "UI: durationChanged ->" << d;
             updateProgressBar();
             this->update();
     }, Qt::QueuedConnection);
@@ -877,6 +879,7 @@ public:
     QObject::connect(m_decoder, &FFmpegVideoDecoder::positionChanged, qApp, [this](qint64 p){
             if (m_holdLastFrameAtEnd) return;
             m_positionMs = p;
+            qDebug() << "UI: positionChanged ->" << p << "durationMs:" << m_durationMs;
     }, Qt::QueuedConnection);
 
     QObject::connect(m_decoder, &FFmpegVideoDecoder::playbackStateChanged, qApp, [this](FFmpegVideoDecoder::PlaybackState s){
@@ -1035,7 +1038,7 @@ public:
         if (m_progressTimer) m_progressTimer->stop();
         // Update local UI state immediately
         m_smoothProgressRatio = r;
-        m_positionMs = static_cast<qint64>(r * m_durationMs);
+    m_positionMs = static_cast<qint64>(std::llround(r * m_durationMs));
         updateProgressBar();
         updateControlsLayout();
         update();
@@ -1071,7 +1074,7 @@ public:
             r = std::clamp<qreal>(r, 0.0, 1.0);
             m_holdLastFrameAtEnd = false;
             seekToRatio(r);
-            if (m_durationMs > 0) m_positionMs = static_cast<qint64>(r * m_durationMs);
+            if (m_durationMs > 0) m_positionMs = static_cast<qint64>(std::llround(r * m_durationMs));
             updateControlsLayout();
             update();
         } else if (m_draggingVolume) {
@@ -1597,7 +1600,11 @@ private:
                 qreal ratio = (m_durationMs > 0) ? (static_cast<qreal>(m_positionMs) / m_durationMs) : 0.0;
                 ratio = std::clamp<qreal>(ratio, 0.0, 1.0);
                 const qreal margin = 2.0;
-                m_progressFillRectItem->setRect(margin, margin, (progWpx - 2*margin) * ratio, rowHpx - 2*margin);
+                const qreal innerW = std::max<qreal>(0.0, progWpx - 2*margin);
+                if (ratio >= 0.999999) ratio = 1.0;
+                qreal w = innerW * ratio;
+                qreal w_rounded = std::round(w);
+                m_progressFillRectItem->setRect(margin, margin, w_rounded, rowHpx - 2*margin);
             }
         }
 
@@ -1781,7 +1788,14 @@ private:
         const QRectF bgRect = m_progressBgRectItem ? m_progressBgRectItem->rect() : QRectF();
         const qreal progWpx = bgRect.width();
         const qreal rowH = bgRect.height();
-        m_progressFillRectItem->setRect(margin, margin, (progWpx - 2*margin) * m_smoothProgressRatio, rowH - 2*margin);
+    const qreal innerW = std::max<qreal>(0.0, progWpx - 2*margin);
+    // Treat values extremely close to 1.0 as full-width to avoid leaving a tiny gap
+    qreal ratio = std::clamp<qreal>(m_smoothProgressRatio, 0.0, 1.0);
+    if (ratio >= 0.999999) ratio = 1.0;
+    qreal w = innerW * ratio;
+    // Round width to device pixels to avoid sub-pixel truncation artifacts
+    qreal w_rounded = std::round(w);
+    m_progressFillRectItem->setRect(margin, margin, w_rounded, rowH - 2*margin);
     }
 
     void maybeAdoptImageSize(const QImage& img) {

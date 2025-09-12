@@ -428,6 +428,20 @@ void FFmpegVideoDecoder::processFrame()
     if (desiredVideoMs <= m_position.load()) {
         return;
     }
+
+    // If we know the duration and the desired playback time has passed it,
+    // treat this as end-of-playback. Some files don't produce a frame whose
+    // timestamp equals the container duration, so rely on the duration to
+    // signal EOF to the UI rather than waiting for an exact-frame match.
+    qint64 knownDur = m_duration.load();
+    if (knownDur > 0 && desiredVideoMs >= knownDur) {
+        qDebug() << "Desired time" << desiredVideoMs << ">= duration" << knownDur << "-> marking EOF";
+        // Ensure we update the final position and notify listeners
+        m_position.store(knownDur);
+        emit positionChanged(knownDur);
+        updatePlaybackState(PlaybackState::Stopped);
+        return;
+    }
     
     if (++frameCount % 30 == 0) {
         qDebug() << "Processing frame" << frameCount 
@@ -512,9 +526,7 @@ void FFmpegVideoDecoder::processFrame()
                 // Older frame; drop
             }
         }
-
-    av_packet_unref(packet);
-
+        
         if (emitted) break;
     }
 
@@ -525,8 +537,15 @@ void FFmpegVideoDecoder::processFrame()
         // No frame emitted this tick; if format indicates EOF, stop playback
         if (m_formatContext && m_formatContext->pb && avio_feof(m_formatContext->pb)) {
             qDebug() << "End of file reached, stopping playback";
+            // Set position to duration (if known) so UI can treat this as EOF/at-end.
+            qint64 dur = m_duration.load();
+            if (dur > 0) {
+                m_position.store(dur);
+                emit positionChanged(dur);
+            }
             updatePlaybackState(PlaybackState::Stopped);
-            seekToPosition(0);
+            // Do NOT seek to 0 here; let UI handle repeat/seek behavior so we avoid
+            // overwriting the final position immediately and confusing overlay logic.
         }
     }
 }
@@ -581,7 +600,7 @@ void FFmpegVideoDecoder::updatePlaybackState(PlaybackState newState)
     
     // Control timer based on state
     if (m_playbackTimer) {
-        if (newState == PlaybackState::Playing) {
+    if (newState == PlaybackState::Playing) {
             qint64 now = QDateTime::currentMSecsSinceEpoch();
             // Anchor playback timing to current system time and current video position
             m_playbackStartSystemMs = now;
