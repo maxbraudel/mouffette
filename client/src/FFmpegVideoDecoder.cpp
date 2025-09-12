@@ -142,9 +142,21 @@ void FFmpegVideoDecoder::setPosition(qint64 positionMs)
 {
     m_seekPosition = positionMs;
     m_seekRequested = true;
-    
+
+    // If we are on the worker thread, perform the seek immediately.
     if (QThread::currentThread() == m_workerThread) {
         seekToPosition(positionMs);
+        return;
+    }
+
+    // Otherwise, schedule a coalesced seek in the worker thread to avoid
+    // overloading decoding when the UI scrubs rapidly. The timer is short
+    // so single clicks still happen quickly but continuous dragging is coalesced.
+    if (m_seekCoalesceTimer) {
+        // Queue starting the timer in the worker thread
+        QMetaObject::invokeMethod(this, [this]() {
+            m_seekCoalesceTimer->start();
+        }, Qt::QueuedConnection);
     } else {
         QMetaObject::invokeMethod(this, [this, positionMs]() {
             seekToPosition(positionMs);
@@ -187,6 +199,11 @@ void FFmpegVideoDecoder::initializeDecoder()
         locker.unlock();
         openFile(filePath);
     }
+    // Create seek coalescing timer (runs in worker thread)
+    m_seekCoalesceTimer = new QTimer(this);
+    m_seekCoalesceTimer->setSingleShot(true);
+    m_seekCoalesceTimer->setInterval(80); // 80ms debounce for scrubbing
+    connect(m_seekCoalesceTimer, &QTimer::timeout, this, &FFmpegVideoDecoder::performPendingSeek);
 }
 
 void FFmpegVideoDecoder::cleanupDecoder()
@@ -401,6 +418,65 @@ bool FFmpegVideoDecoder::seekToPosition(qint64 positionMs)
         m_playbackStartVideoMs = m_position;
         m_playbackStartSystemMs = QDateTime::currentMSecsSinceEpoch();
     }
+    // Immediately decode and emit one frame at/after the requested position so the UI
+    // can display the new frame without waiting for the regular playback tick.
+    // This runs in the worker thread; if called from another thread it was queued above.
+    {
+        AVPacket* pkt = av_packet_alloc();
+        if (pkt) {
+            bool gotFrame = false;
+            int decodeIterations = 0;
+            // Use a time budget plus iteration cap. If currently playing, allow a larger
+            // budget so playback can resume without heavy stuttering; for paused/preview
+            // keep the budget small for snappy UI.
+            const int maxIterationsFast = 64;
+            const int maxIterationsPlay = 1000;
+            const int maxTimeMsFast = 80;
+            const int maxTimeMsPlay = 250;
+            bool isPlaying = (m_playbackState.load() == PlaybackState::Playing);
+            int maxIter = isPlaying ? maxIterationsPlay : maxIterationsFast;
+            int maxTime = isPlaying ? maxTimeMsPlay : maxTimeMsFast;
+
+            QElapsedTimer timer; timer.start();
+            while (av_read_frame(m_formatContext, pkt) >= 0) {
+                if (pkt->stream_index != m_videoStreamIndex) { av_packet_unref(pkt); continue; }
+                if (avcodec_send_packet(m_codecContext, pkt) < 0) { av_packet_unref(pkt); continue; }
+                while (avcodec_receive_frame(m_codecContext, m_frame) == 0) {
+                    qint64 ts = getFrameTimestampMs(m_frame);
+                    if (ts >= positionMs) {
+                        QImage image = convertFrameToQImage(m_frame);
+                        if (!image.isNull()) {
+                            m_position.store(ts);
+                            emit frameReady(image, ts);
+                            emit positionChanged(ts);
+                            gotFrame = true;
+                        }
+                        break;
+                    }
+                    // else drop frame
+                }
+                av_packet_unref(pkt);
+                if (gotFrame) break;
+                if (++decodeIterations > maxIter) break;
+                if (timer.elapsed() > maxTime) break;
+            }
+            av_packet_free(&pkt);
+
+            // If we failed to decode a precise frame within the budget, still emit
+            // the requested position so the UI progress updates immediately. A
+            // subsequent background processing tick will continue decoding frames
+            // to produce the exact image.
+            if (!gotFrame) {
+                m_position.store(positionMs);
+                emit positionChanged(positionMs);
+                // If not playing, request a one-shot decode to continue trying in background
+                if (!isPlaying) {
+                    m_serveOneFrame.store(true);
+                    QMetaObject::invokeMethod(this, &FFmpegVideoDecoder::processFrame, Qt::QueuedConnection);
+                }
+            }
+        }
+    }
     return true;
 }
 
@@ -559,6 +635,20 @@ void FFmpegVideoDecoder::processFrame()
             // Do NOT seek to 0 here; let UI handle repeat/seek behavior so we avoid
             // overwriting the final position immediately and confusing overlay logic.
         }
+    }
+}
+
+void FFmpegVideoDecoder::performPendingSeek()
+{
+    // This runs in the worker thread. Consume the pending seek and perform it.
+    if (!m_seekRequested) return;
+    qint64 pos = m_seekPosition.load();
+    // Clear the flag first to avoid re-entrancy
+    m_seekRequested = false;
+    // Perform seek
+    if (seekToPosition(pos)) {
+        // After seekToPosition already primes & emits one frame in our implementation,
+        // nothing more to do here. If not primed, we could call requestFirstFrame().
     }
 }
 

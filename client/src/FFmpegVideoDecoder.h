@@ -71,6 +71,7 @@ public slots:
 
 private slots:
     void processFrame();
+    void performPendingSeek();
 
 private:
     // FFmpeg context (only accessed from worker thread)
@@ -101,6 +102,8 @@ private:
     // Worker thread components
     QThread* m_workerThread = nullptr;
     QTimer* m_playbackTimer = nullptr;
+    // Timer to coalesce rapid seek requests (scrubbing)
+    QTimer* m_seekCoalesceTimer = nullptr;
     std::atomic<bool> m_shouldStop{false};
 
     // Frame timing
