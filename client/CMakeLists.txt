@@ -15,6 +15,15 @@ endif()
 # Find Qt6
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network WebSockets Multimedia Svg SvgWidgets)
 
+# Find FFmpeg
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
+    libavformat
+    libavcodec
+    libavutil
+    libswscale
+)
+
 # Enable Qt MOC
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
@@ -26,6 +35,7 @@ set(SOURCES
     src/MainWindow.cpp
     src/WebSocketClient.cpp
     src/ClientInfo.cpp
+    src/FFmpegVideoDecoder.cpp
 )
 
 # Platform-specific sources
@@ -43,6 +53,7 @@ set(HEADERS
     src/ClientInfo.h
     src/MacDockHider.h
     src/MacVideoThumbnailer.h
+    src/FFmpegVideoDecoder.h
 )
 
 # UI files
@@ -67,6 +78,7 @@ target_link_libraries(MouffetteClient
     Qt6::Multimedia
     Qt6::Svg
     Qt6::SvgWidgets
+    PkgConfig::FFMPEG
 )
 
 # Include directories

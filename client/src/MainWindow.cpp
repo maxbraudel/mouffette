@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "FFmpegVideoDecoder.h"
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QHostInfo>
@@ -609,12 +610,12 @@ class ResizableVideoItem;
 // Phase 2: Frame Conversion Worker for async processing
 class FrameConversionWorker : public QRunnable {
 public:
-    FrameConversionWorker(ResizableVideoItem* item, QVideoFrame frame, quint64 serial)
-        : m_itemPtr(reinterpret_cast<uintptr_t>(item)), m_frame(frame), m_serial(serial)
+    FrameConversionWorker(ResizableVideoItem* item, const QImage& image, quint64 serial)
+        : m_itemPtr(reinterpret_cast<uintptr_t>(item)), m_image(image), m_serial(serial)
     {
         setAutoDelete(true);
     }
-    
+
     void run() override; // Implementation moved after ResizableVideoItem definition
     
     // Global registry to validate item lifetime
@@ -628,7 +629,7 @@ public:
     
 private:
     uintptr_t m_itemPtr;
-    QVideoFrame m_frame;
+    QImage m_image;
     quint64 m_serial;
 };
 
@@ -643,79 +644,71 @@ public:
         
         m_controlsFadeMs = std::max(0, controlsFadeMs);
         
-        // Keep media player on main thread - Phase 2 async conversion is sufficient
-        m_player = new QMediaPlayer();
-        m_audio = new QAudioOutput();
-        m_sink = new QVideoSink();
-        m_player->setAudioOutput(m_audio);
-        m_player->setVideoSink(m_sink);
-        m_player->setSource(QUrl::fromLocalFile(filePath));
-        
-        // Connect signals directly (no worker needed)
-        QObject::connect(m_sink, &QVideoSink::videoFrameChanged, m_player, [this](const QVideoFrame& f){
+        // Use FFmpeg-based decoder running in a dedicated worker thread
+        m_decoder = new FFmpegVideoDecoder();
+        m_decoder->moveToWorkerThread();
+        m_decoder->setSource(filePath);
+
+    // Auto-start playback so dropped videos begin decoding frames immediately
+    m_primingFirstFrame = true;
+    m_decoder->play();
+
+        // Connect decoder frame signal to the same processing pipeline
+    QObject::connect(m_decoder, &FFmpegVideoDecoder::frameReady, qApp, [this](const QImage& image, qint64 timestamp){
             ++m_framesReceived;
-            
-            // Only replace the cached frame when valid and not holding the last frame at end-of-media
-            if (!m_holdLastFrameAtEnd && f.isValid()) {
-                // Phase 2: Early visibility check - skip processing if not visible
+
+            // Skip processing if we're holding the last frame or got an invalid image
+            if (!m_holdLastFrameAtEnd && !image.isNull()) {
+                // Early visibility check - skip processing if not visible
                 if (!isVisibleInAnyView()) {
                     ++m_framesSkipped;
                     logFrameStats();
                     return;
                 }
-                
-                // Phase 2: Async frame conversion with dropping
-                {
-                    QMutexLocker locker(&m_frameMutex);
-                    m_pendingFrame = f; // Always store latest frame
-                }
-                
-                // Only start conversion if not already busy
+
+                // Only process if we're not currently busy with conversion
                 if (!m_conversionBusy.exchange(true)) {
                     quint64 serial = ++m_frameSerial;
-                    auto* worker = new FrameConversionWorker(this, f, serial);
+                    // Start conversion worker directly with the original image
+                    // No need for intermediate copies since QImage uses implicit sharing
+                    auto* worker = new FrameConversionWorker(this, image, serial);
                     QThreadPool::globalInstance()->start(worker);
                     ++m_conversionsStarted;
                     ++m_framesProcessed;
                 } else {
-                    ++m_framesSkipped; // Conversion busy, frame will be picked up later
+                    ++m_framesSkipped;
                 }
-                
-                // Always store the latest frame for size adoption (lightweight)
-                m_lastFrame = f;
-                maybeAdoptFrameSize(f);
-                
-                // If we primed playback to grab the first frame, pause immediately and restore audio state
+
+                // Store latest image for size adoption
+                m_lastImage = image;
+                maybeAdoptImageSize(image);
+
                 if (m_primingFirstFrame && !m_firstFramePrimed) {
                     m_firstFramePrimed = true;
                     m_primingFirstFrame = false;
-                    if (m_player) {
-                        m_player->pause();
-                        m_player->setPosition(0);
-                    }
-                    if (m_audio) m_audio->setMuted(m_savedMuted);
-                    // Unlock controls now that the video is ready
                     m_controlsLockedUntilReady = false;
-                    m_controlsDidInitialFade = false; // next show should fade once
-                    if (isSelected()) {
-                        setControlsVisible(true);
-                        updateControlsLayout();
-                        // Force repaint for first frame unlock
-                        m_lastRepaintMs = 0;
-                        update();
-                        return;
-                    }
+                    m_controlsDidInitialFade = false;
+                    // Always show controls when first frame arrives so they're ready when selected
+                    setControlsVisible(true);
+                    updateControlsLayout();
+                    m_lastRepaintMs = 0;
+                    // Set selected state and ensure visibility
+                    setSelected(true);
+                    if (m_controlsBg) m_controlsBg->setVisible(true);
+                    // Force a complete layout update
+                    updateControlsLayout();
+                    update();
+                    return;
                 }
-                
+
                 logFrameStats();
             }
-            
-            // Throttled repaint (will paint existing cached image or fallback)
+
             if (shouldRepaint()) {
                 m_lastRepaintMs = QDateTime::currentMSecsSinceEpoch();
                 this->update();
             }
-        });
+    });
         
     // Controls overlays (ignore transforms so they stay in absolute pixels)
     // Create as child first, then reparent to scene for scale-invariant positioning
@@ -836,130 +829,103 @@ public:
     m_progressTimer = new QTimer();
     m_progressTimer->setInterval(33); // ~30fps updates for smooth progress (more efficient than 60fps)
     
-    // Connect timer to update progress smoothly during playback
+    // Connect timer to update progress smoothly during playback (uses decoder position)
     QObject::connect(m_progressTimer, &QTimer::timeout, [this]() {
-        if (m_player && m_player->playbackState() == QMediaPlayer::PlayingState && 
+        if (m_decoder && m_decoder->playbackState() == FFmpegVideoDecoder::PlaybackState::Playing && 
             !m_draggingProgress && !m_holdLastFrameAtEnd && !m_seeking && m_durationMs > 0) {
-            // Calculate smooth progress based on current player position
-            qint64 currentPos = m_player->position();
+            qint64 currentPos = m_positionMs;
             qreal newRatio = static_cast<qreal>(currentPos) / m_durationMs;
             m_smoothProgressRatio = std::clamp<qreal>(newRatio, 0.0, 1.0);
             updateProgressBar();
             this->update();
         }
     });
-    // Controls are hidden by default (only visible when the item is selected)
-    // Lock controls until video is ready (first frame primed)
-    m_controlsLockedUntilReady = true;
+    // Initialize controls (they will be shown when selected)
+    m_controlsLockedUntilReady = false; // Allow controls immediately
     m_controlsDidInitialFade = false;
-    if (m_controlsBg) m_controlsBg->setVisible(false);
-    if (m_playBtnRectItem) m_playBtnRectItem->setVisible(false);
-    if (m_playIcon) m_playIcon->setVisible(false);
-    if (m_pauseIcon) m_pauseIcon->setVisible(false);
-    if (m_stopBtnRectItem) m_stopBtnRectItem->setVisible(false);
-    if (m_stopIcon) m_stopIcon->setVisible(false);
-    if (m_repeatBtnRectItem) m_repeatBtnRectItem->setVisible(false);
-    if (m_repeatIcon) m_repeatIcon->setVisible(false);
-    if (m_muteBtnRectItem) m_muteBtnRectItem->setVisible(false);
-    if (m_muteIcon) m_muteIcon->setVisible(false);
-    if (m_muteSlashIcon) m_muteSlashIcon->setVisible(false);
-    if (m_volumeBgRectItem) m_volumeBgRectItem->setVisible(false);
-    if (m_volumeFillRectItem) m_volumeFillRectItem->setVisible(false);
-    if (m_progressBgRectItem) m_progressBgRectItem->setVisible(false);
-    if (m_progressFillRectItem) m_progressFillRectItem->setVisible(false);
     
-    // Connect media player signals directly (main thread)
-    QObject::connect(m_player, &QMediaPlayer::mediaStatusChanged, m_player, [this](QMediaPlayer::MediaStatus s){
-        if (s == QMediaPlayer::LoadedMedia || s == QMediaPlayer::BufferedMedia) {
-            if (!m_adoptedSize) {
-                const QMediaMetaData md = m_player->metaData();
-                const QVariant v = md.value(QMediaMetaData::Resolution);
-                const QSize sz = v.toSize();
-                if (!sz.isEmpty()) adoptBaseSize(sz);
-                // Try to use a poster/thumbnail image while waiting for the first frame
-                const QVariant thumbVar = md.value(QMediaMetaData::ThumbnailImage);
-                if (!m_posterImageSet && thumbVar.isValid()) {
-                    if (thumbVar.canConvert<QImage>()) {
-                        m_posterImage = thumbVar.value<QImage>();
-                        m_posterImageSet = !m_posterImage.isNull();
-                    } else if (thumbVar.canConvert<QPixmap>()) {
-                        m_posterImage = thumbVar.value<QPixmap>().toImage();
-                        m_posterImageSet = !m_posterImage.isNull();
-                    }
-                    if (!m_posterImageSet) {
-                        const QVariant coverVar = md.value(QMediaMetaData::CoverArtImage);
-                        if (coverVar.canConvert<QImage>()) {
-                            m_posterImage = coverVar.value<QImage>();
-                            m_posterImageSet = !m_posterImage.isNull();
-                        } else if (coverVar.canConvert<QPixmap>()) {
-                            m_posterImage = coverVar.value<QPixmap>().toImage();
-                            m_posterImageSet = !m_posterImage.isNull();
+    // Make sure all control elements exist and are properly parented
+    if (m_controlsBg) {
+        m_controlsBg->setVisible(true);
+        m_controlsBg->setOpacity(0.0); // Start invisible but enable fade-in
+        
+        // Initialize all control elements visible but with parent opacity 0
+        if (m_playBtnRectItem) m_playBtnRectItem->setVisible(true);
+        if (m_playIcon) m_playIcon->setVisible(true);
+        if (m_pauseIcon) m_pauseIcon->setVisible(false); // Only one play state visible
+        if (m_stopBtnRectItem) m_stopBtnRectItem->setVisible(true);
+        if (m_stopIcon) m_stopIcon->setVisible(true);
+        if (m_repeatBtnRectItem) m_repeatBtnRectItem->setVisible(true);
+        if (m_repeatIcon) m_repeatIcon->setVisible(true);
+        if (m_muteBtnRectItem) m_muteBtnRectItem->setVisible(true);
+        if (m_muteIcon) m_muteIcon->setVisible(true);
+        if (m_muteSlashIcon) m_muteSlashIcon->setVisible(false); // Only one volume state visible
+        if (m_volumeBgRectItem) m_volumeBgRectItem->setVisible(true);
+        if (m_volumeFillRectItem) m_volumeFillRectItem->setVisible(true);
+        if (m_progressBgRectItem) m_progressBgRectItem->setVisible(true);
+        if (m_progressFillRectItem) m_progressFillRectItem->setVisible(true);
+    }
+    
+    // Connect FFmpeg decoder signals
+    if (m_decoder) {
+    QObject::connect(m_decoder, &FFmpegVideoDecoder::durationChanged, qApp, [this](qint64 d){
+            m_durationMs = d;
+            this->update();
+    }, Qt::QueuedConnection);
+
+    QObject::connect(m_decoder, &FFmpegVideoDecoder::positionChanged, qApp, [this](qint64 p){
+            if (m_holdLastFrameAtEnd) return;
+            m_positionMs = p;
+    }, Qt::QueuedConnection);
+
+    QObject::connect(m_decoder, &FFmpegVideoDecoder::playbackStateChanged, qApp, [this](FFmpegVideoDecoder::PlaybackState s){
+            // When playback stops due to EOF, handle repeat/hold
+            if (s == FFmpegVideoDecoder::PlaybackState::Stopped) {
+                if (m_repeatEnabled) {
+                    if (m_progressTimer) m_progressTimer->stop();
+                    m_smoothProgressRatio = 0.0;
+                    updateProgressBar();
+                    m_decoder->setPosition(0);
+                    m_decoder->play();
+                    QTimer::singleShot(10, [this]() {
+                        if (m_progressTimer && m_decoder && m_decoder->playbackState() == FFmpegVideoDecoder::PlaybackState::Playing) {
+                            m_progressTimer->start();
                         }
-                    }
-                    if (m_posterImageSet) this->update();
+                    });
+                } else {
+                    m_holdLastFrameAtEnd = true;
+                    if (m_durationMs > 0) m_positionMs = m_durationMs;
+                    m_smoothProgressRatio = 1.0;
+                    updateProgressBar();
+                    if (m_progressTimer) m_progressTimer->stop();
+                    updateControlsLayout();
+                    update();
                 }
             }
-            if (!m_firstFramePrimed && !m_primingFirstFrame) {
-                m_holdLastFrameAtEnd = false; // new load, don't hold
-                m_savedMuted = m_audio ? m_audio->isMuted() : false;
-                if (m_audio) m_audio->setMuted(true);
-                m_primingFirstFrame = true;
-                if (m_player) m_player->play();
+            // Update play/pause icons and progress timer for all state changes
+            bool isPlaying = (s == FFmpegVideoDecoder::PlaybackState::Playing);
+            if (m_playIcon && m_pauseIcon) {
+                m_playIcon->setVisible(!isPlaying);
+                m_pauseIcon->setVisible(isPlaying);
             }
-        }
-        if (s == QMediaPlayer::EndOfMedia) {
-            if (m_repeatEnabled) {
-                // Stop timer temporarily to prevent flickering during reset
-                if (m_progressTimer) m_progressTimer->stop();
-                // Reset progress instantly when repeating
-                m_smoothProgressRatio = 0.0;
-                updateProgressBar();
-                m_player->setPosition(0);
-                m_player->play();
-                // Restart timer after a brief delay to ensure position is set
-                QTimer::singleShot(10, [this]() {
-                    if (m_progressTimer && m_player && m_player->playbackState() == QMediaPlayer::PlayingState) {
-                        m_progressTimer->start();
-                    }
-                });
-            } else {
-                // Keep showing the last frame and pin progress to 100%
-                m_holdLastFrameAtEnd = true;
-                if (m_durationMs > 0) m_positionMs = m_durationMs;
-                // Set progress to 100% instantly
-                m_smoothProgressRatio = 1.0;
-                updateProgressBar();
-                // Stop smooth progress timer when video ends
-                if (m_progressTimer) m_progressTimer->stop();
-                // Update controls immediately to reflect Play state without waiting for further signals
-                updateControlsLayout();
-                update();
-                if (m_player) m_player->pause();
+            if (m_progressTimer) {
+                if (isPlaying && !m_seeking && !m_holdLastFrameAtEnd) m_progressTimer->start();
+                else m_progressTimer->stop();
             }
-        }
-    });
-    
-    QObject::connect(m_player, &QMediaPlayer::durationChanged, m_player, [this](qint64 d){ 
-        m_durationMs = d; 
-        this->update(); 
-    });
-    
-    QObject::connect(m_player, &QMediaPlayer::positionChanged, m_player, [this](qint64 p){
-        if (m_holdLastFrameAtEnd) return; // keep progress pinned at end until user action
-        m_positionMs = p; 
-        // Progress updates are handled by the timer for smooth real-time movement
-    });
+    }, Qt::QueuedConnection);
+    }
     }
     ~ResizableVideoItem() override {
     // Phase 2: Unregister from async frame conversion
     FrameConversionWorker::unregisterItem(this);
     
-    // Clean up media player (main thread)
-    if (m_player) QObject::disconnect(m_player, nullptr, nullptr, nullptr);
-    if (m_sink) QObject::disconnect(m_sink, nullptr, nullptr, nullptr);
-    delete m_player;
-    delete m_audio;
-    delete m_sink;
+    // Clean up decoder
+    if (m_decoder) {
+        QObject::disconnect(m_decoder, nullptr, nullptr, nullptr);
+        // Stop and delete worker thread via decoder destructor
+        delete m_decoder;
+        m_decoder = nullptr;
+    }
     
     delete m_controlsFadeAnim;
     // Clean up controls overlay if top-level scene item
@@ -983,33 +949,46 @@ public:
     }
     }
     void togglePlayPause() {
-        if (!m_player) return;
-        if (m_player->playbackState() == QMediaPlayer::PlayingState) {
-            m_player->pause();
-            // Stop smooth progress timer when paused
+        if (!m_decoder) return;
+        // Debounce rapid clicks to avoid racing the decoder state
+        static bool toggleLocked = false;
+        if (toggleLocked) {
+            return;
+        }
+        toggleLocked = true;
+        QTimer::singleShot(120, [&]() { toggleLocked = false; });
+
+        // Optimistically update UI first for snappy feedback
+        bool currentlyPlaying = (m_decoder->playbackState() == FFmpegVideoDecoder::PlaybackState::Playing);
+        if (currentlyPlaying) {
+            // User requested pause
             if (m_progressTimer) m_progressTimer->stop();
+            // Update icons immediately
+            if (m_playIcon && m_pauseIcon) { m_playIcon->setVisible(true); m_pauseIcon->setVisible(false); }
+            // Send pause command asynchronously
+            QMetaObject::invokeMethod(qApp, [this]() { if (m_decoder) m_decoder->pause(); }, Qt::QueuedConnection);
         } else {
-            // If we were holding the last frame, restart cleanly from the beginning
+            // User requested play
             if (m_holdLastFrameAtEnd) {
                 m_holdLastFrameAtEnd = false;
                 m_positionMs = 0;
-                m_player->setPosition(0);
-                // Reset progress to 0
+                QMetaObject::invokeMethod(qApp, [this]() { if (m_decoder) m_decoder->setPosition(0); }, Qt::QueuedConnection);
                 m_smoothProgressRatio = 0.0;
                 updateProgressBar();
             }
-            m_player->play();
-            // Start smooth progress timer when playing
             if (m_progressTimer) m_progressTimer->start();
+            if (m_playIcon && m_pauseIcon) { m_playIcon->setVisible(false); m_pauseIcon->setVisible(true); }
+            QMetaObject::invokeMethod(qApp, [this]() { if (m_decoder) m_decoder->play(); }, Qt::QueuedConnection);
         }
+
         updateControlsLayout();
         update();
     }
     void stopToBeginning() {
-        if (!m_player) return;
+    if (!m_decoder) return;
     m_holdLastFrameAtEnd = false;
-        m_player->pause();
-        m_player->setPosition(0);
+    m_decoder->pause();
+    m_decoder->setPosition(0);
     m_positionMs = 0;
     // Reset progress and stop timer
     m_smoothProgressRatio = 0.0;
@@ -1025,14 +1004,13 @@ public:
     update();
     }
     void toggleMute() {
-        if (!m_audio) return;
-    m_audio->setMuted(!m_audio->isMuted());
-    // Ensure the icon updates immediately
-    updateControlsLayout();
-    update();
+        // Audio control not implemented for FFmpeg decoder here
+    // no-op for now
+        updateControlsLayout();
+        update();
     }
     void seekToRatio(qreal r) {
-        if (!m_player || m_durationMs <= 0) return;
+        if (!m_decoder || m_durationMs <= 0) return;
         r = std::clamp<qreal>(r, 0.0, 1.0);
         m_holdLastFrameAtEnd = false;
         // Suppress timer updates briefly to avoid flicker back to old position
@@ -1046,11 +1024,11 @@ public:
         update();
         // Perform the actual seek
         const qint64 pos = m_positionMs;
-        m_player->setPosition(pos);
+        m_decoder->setPosition(pos);
         // Re-enable timer after a short delay to allow backend to settle
         QTimer::singleShot(30, [this]() {
             m_seeking = false;
-            if (m_progressTimer && m_player && m_player->playbackState() == QMediaPlayer::PlayingState)
+            if (m_progressTimer && m_decoder && m_decoder->playbackState() == FFmpegVideoDecoder::PlaybackState::Playing)
                 m_progressTimer->start();
         });
     }
@@ -1082,7 +1060,7 @@ public:
         } else if (m_draggingVolume) {
             qreal r = (p.x() - m_volumeRectItemCoords.left()) / m_volumeRectItemCoords.width();
             r = std::clamp<qreal>(r, 0.0, 1.0);
-            if (m_audio) m_audio->setVolume(r);
+            Q_UNUSED(r);
             updateControlsLayout();
             update();
         }
@@ -1141,12 +1119,13 @@ public:
         // Check if there's a newer pending frame to process
         {
             QMutexLocker locker(&m_frameMutex);
-            if (m_pendingFrame.isValid() && !m_conversionBusy.exchange(true)) {
+            if (!m_pendingImage.isNull() && !m_conversionBusy.exchange(true)) {
                 quint64 newSerial = ++m_frameSerial;
-                auto* worker = new FrameConversionWorker(this, m_pendingFrame, newSerial);
+                QImage pendingCopy = m_pendingImage;
+                m_pendingImage = QImage();
+                auto* worker = new FrameConversionWorker(this, pendingCopy, newSerial);
                 QThreadPool::globalInstance()->start(worker);
                 ++m_conversionsStarted;
-                m_pendingFrame = QVideoFrame(); // Clear pending
             }
         }
         
@@ -1183,7 +1162,7 @@ public:
         if (m_volumeRectItemCoords.contains(itemPos)) {
             qreal r = (itemPos.x() - m_volumeRectItemCoords.left()) / m_volumeRectItemCoords.width();
             r = std::clamp<qreal>(r, 0.0, 1.0);
-            if (m_audio) m_audio->setVolume(r);
+            Q_UNUSED(r);
             updateControlsLayout();
             // Begin drag-to-volume
             m_draggingVolume = true;
@@ -1219,16 +1198,6 @@ public:
         if (!m_lastFrameImage.isNull()) {
             QRectF dst = fitRect(br, m_lastFrameImage.size());
             painter->drawImage(dst, m_lastFrameImage);
-        } else if (m_lastFrame.isValid()) {
-            // One-time fallback if cache not yet populated
-            QImage img = m_lastFrame.toImage();
-            if (!img.isNull()) {
-                QRectF dst = fitRect(br, img.size());
-                painter->drawImage(dst, img);
-            } else if (m_posterImageSet && !m_posterImage.isNull()) {
-                QRectF dst = fitRect(br, m_posterImage.size());
-                painter->drawImage(dst, m_posterImage);
-            }
         } else if (m_posterImageSet && !m_posterImage.isNull()) {
             QRectF dst = fitRect(br, m_posterImage.size());
             painter->drawImage(dst, m_posterImage);
@@ -1313,7 +1282,7 @@ public:
     if (!m_controlsLockedUntilReady && isSelected() && m_volumeRectItemCoords.contains(event->pos())) {
             qreal r = (event->pos().x() - m_volumeRectItemCoords.left()) / m_volumeRectItemCoords.width();
             r = std::clamp<qreal>(r, 0.0, 1.0);
-            if (m_audio) m_audio->setVolume(r);
+            Q_UNUSED(r);
             updateControlsLayout();
             m_draggingVolume = true;
             grabMouse();
@@ -1354,7 +1323,7 @@ public:
             if (m_volumeRectItemCoords.contains(event->pos())) {
                 qreal r = (event->pos().x() - m_volumeRectItemCoords.left()) / m_volumeRectItemCoords.width();
                 r = std::clamp<qreal>(r, 0.0, 1.0);
-                if (m_audio) m_audio->setVolume(r);
+                Q_UNUSED(r);
                 event->accept();
                 return;
             }
@@ -1416,7 +1385,7 @@ protected:
             if (m_draggingVolume) {
                 qreal r = (event->pos().x() - m_volumeRectItemCoords.left()) / m_volumeRectItemCoords.width();
                 r = std::clamp<qreal>(r, 0.0, 1.0);
-                if (m_audio) m_audio->setVolume(r);
+                Q_UNUSED(r);
                 updateControlsLayout();
                 update();
                 event->accept();
@@ -1434,7 +1403,7 @@ protected:
             // Allow timer to resume after a beat so backend position has caught up
             QTimer::singleShot(30, [this]() {
                 m_seeking = false;
-                if (m_progressTimer && m_player && m_player->playbackState() == QMediaPlayer::PlayingState)
+                if (m_progressTimer && m_decoder && m_decoder->playbackState() == FFmpegVideoDecoder::PlaybackState::Playing)
                     m_progressTimer->start();
             });
             event->accept();
@@ -1471,15 +1440,15 @@ private:
         const bool allow = show && !m_controlsLockedUntilReady;
         auto setChildrenVisible = [this](bool vis){
             if (m_playBtnRectItem) m_playBtnRectItem->setVisible(vis);
-            if (m_playIcon) m_playIcon->setVisible(vis && !(m_player && m_player->playbackState() == QMediaPlayer::PlayingState));
-            if (m_pauseIcon) m_pauseIcon->setVisible(vis &&  (m_player && m_player->playbackState() == QMediaPlayer::PlayingState));
+            if (m_playIcon) m_playIcon->setVisible(vis && !(m_decoder && m_decoder->playbackState() == FFmpegVideoDecoder::PlaybackState::Playing));
+            if (m_pauseIcon) m_pauseIcon->setVisible(vis &&  (m_decoder && m_decoder->playbackState() == FFmpegVideoDecoder::PlaybackState::Playing));
             if (m_stopBtnRectItem) m_stopBtnRectItem->setVisible(vis);
             if (m_stopIcon) m_stopIcon->setVisible(vis);
             if (m_repeatBtnRectItem) m_repeatBtnRectItem->setVisible(vis);
             if (m_repeatIcon) m_repeatIcon->setVisible(vis);
             if (m_muteBtnRectItem) m_muteBtnRectItem->setVisible(vis);
             if (m_muteIcon) m_muteIcon->setVisible(vis);
-            if (m_muteSlashIcon) m_muteSlashIcon->setVisible(vis && m_audio && m_audio->isMuted());
+            if (m_muteSlashIcon) m_muteSlashIcon->setVisible(vis && false); // FFmpeg decoder audio not managed here
             if (m_volumeBgRectItem) m_volumeBgRectItem->setVisible(vis);
             if (m_volumeFillRectItem) m_volumeFillRectItem->setVisible(vis);
             if (m_progressBgRectItem) m_progressBgRectItem->setVisible(vis);
@@ -1597,13 +1566,13 @@ private:
         if (m_muteBtnRectItem) {
             m_muteBtnRectItem->setRect(0, 0, muteWpx, rowHpx); m_muteBtnRectItem->setPos(x3, 0);
             m_muteBtnRectItem->setRadius(ResizableMediaBase::getCornerRadiusOfMediaOverlaysPx());
-            bool muted = m_audio && m_audio->isMuted();
+            bool muted = false;
             m_muteBtnRectItem->setBrush(muted ? activeBrush : baseBrush);
         }
         if (m_volumeBgRectItem) { m_volumeBgRectItem->setRect(0, 0, volumeWpx, rowHpx); m_volumeBgRectItem->setPos(x4, 0); }
         if (m_volumeFillRectItem) {
             const qreal margin = 2.0;
-            qreal vol = m_audio ? std::clamp<qreal>(m_audio->volume(), 0.0, 1.0) : 0.0;
+            qreal vol = 0.0;
             const qreal innerW = std::max<qreal>(0.0, volumeWpx - 2*margin);
             m_volumeFillRectItem->setRect(margin, margin, innerW * vol, rowHpx - 2*margin);
         }
@@ -1636,7 +1605,7 @@ private:
             const qreal y = (targetH - nat.height()*scale) / 2.0;
             svg->setPos(x, y);
         };
-        bool isPlaying = (m_player && m_player->playbackState() == QMediaPlayer::PlayingState);
+    bool isPlaying = (m_decoder && m_decoder->playbackState() == FFmpegVideoDecoder::PlaybackState::Playing);
         if (m_holdLastFrameAtEnd) isPlaying = false;
         if (!m_repeatEnabled && m_durationMs > 0 && (m_positionMs + 30 >= m_durationMs)) isPlaying = false;
         if (m_playIcon && m_pauseIcon) {
@@ -1647,7 +1616,7 @@ private:
         }
         placeSvg(m_stopIcon, stopWpx, rowHpx);
         placeSvg(m_repeatIcon, repeatWpx, rowHpx);
-        bool muted = m_audio && m_audio->isMuted();
+        bool muted = false; // audio handled separately
         if (m_muteIcon && m_muteSlashIcon) {
             m_muteIcon->setVisible(!muted);
             m_muteSlashIcon->setVisible(muted);
@@ -1679,10 +1648,8 @@ private:
     }
     qreal baseWidth() const { return static_cast<qreal>(m_baseSize.width()); }
     qreal baseHeight() const { return static_cast<qreal>(m_baseSize.height()); }
-    QMediaPlayer* m_player = nullptr;
-    QAudioOutput* m_audio = nullptr;
-    QVideoSink* m_sink = nullptr;
-    QVideoFrame m_lastFrame;
+    // FFmpeg-based decoder (runs in worker thread)
+    FFmpegVideoDecoder* m_decoder = nullptr;
     QImage m_lastFrameImage;
     qint64 m_durationMs = 0;
     qint64 m_positionMs = 0;
@@ -1748,7 +1715,8 @@ private:
     
     // Phase 2: Async frame conversion with frame dropping
     std::atomic<bool> m_conversionBusy{false};
-    QVideoFrame m_pendingFrame;
+    QImage m_pendingImage;
+    QImage m_lastImage;
     QMutex m_frameMutex;
     std::atomic<quint64> m_frameSerial{0};
     quint64 m_lastProcessedSerial = 0;
@@ -1807,25 +1775,32 @@ private:
         const qreal rowH = bgRect.height();
         m_progressFillRectItem->setRect(margin, margin, (progWpx - 2*margin) * m_smoothProgressRatio, rowH - 2*margin);
     }
+
+    void maybeAdoptImageSize(const QImage& img) {
+        if (img.isNull()) return;
+        QSize newSize = img.size();
+        if (newSize.isEmpty()) return;
+        // Adopt base size on first meaningful decoded frame (preserves aspect)
+        if (!m_adoptedSize) {
+            adoptBaseSize(newSize);
+        }
+    }
 };
 
 QSet<uintptr_t> FrameConversionWorker::s_activeItems;
 
 // Phase 2: FrameConversionWorker implementation (after ResizableVideoItem is fully defined)
 void FrameConversionWorker::run() {
-    if (!m_frame.isValid()) return;
-    
+    if (m_image.isNull()) return;
+
     // Do the expensive conversion off the main thread
-    QImage img = m_frame.toImage();
-    if (img.isNull()) return;
-    
-    QImage converted = img.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    QImage converted = m_image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
     if (converted.isNull()) return;
-    
+
     // Capture by value for the callback to avoid lifetime issues
     uintptr_t itemPtr = m_itemPtr;
     quint64 serial = m_serial;
-    
+
     // Post result back to main thread via queued connection
     QMetaObject::invokeMethod(qApp, [itemPtr, converted = std::move(converted), serial]() mutable {
         // Validate that the item still exists via static registry check
