@@ -20,6 +20,8 @@ fi
 echo "🔨 Building..."
 make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 
+cd ../
+
 # Check if build was successful
 if [ $? -eq 0 ]; then
     echo "✅ Build successful!"

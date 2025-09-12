@@ -91,6 +91,8 @@ private:
     std::atomic<double> m_playbackRate{1.0};
     std::atomic<bool> m_hasVideo{false};
     QSize m_videoSize;
+    // Do not emit or report positions earlier than this after a seek; -1 disables the guard
+    std::atomic<qint64> m_minPositionAfterSeek{-1};
 
     // Control commands (thread-safe)
     mutable QMutex m_commandMutex;

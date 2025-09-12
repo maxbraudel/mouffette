@@ -88,8 +88,12 @@ void FFmpegVideoDecoder::setSource(const QString& filePath)
 void FFmpegVideoDecoder::play()
 {
     m_requestedState = PlaybackState::Playing;
-    
+
     if (QThread::currentThread() == m_workerThread) {
+        // If a seek is pending (e.g., user scrubbed while paused), perform it now
+        if (m_seekRequested) {
+            performPendingSeek();
+        }
         // If we're already at the end (position == duration), restart from 0
         qint64 dur = m_duration.load();
         qint64 pos = m_position.load();
@@ -99,6 +103,10 @@ void FFmpegVideoDecoder::play()
         updatePlaybackState(PlaybackState::Playing);
     } else {
         QMetaObject::invokeMethod(this, [this]() {
+            // If a seek is pending (e.g., user scrubbed while paused), perform it now
+            if (m_seekRequested) {
+                performPendingSeek();
+            }
             // If we're already at the end (position == duration), restart from 0
             qint64 dur = m_duration.load();
             qint64 pos = m_position.load();
@@ -142,6 +150,8 @@ void FFmpegVideoDecoder::setPosition(qint64 positionMs)
 {
     m_seekPosition = positionMs;
     m_seekRequested = true;
+    // Ensure we do not emit or report positions earlier than the requested seek
+    m_minPositionAfterSeek.store(positionMs);
 
     // If we are on the worker thread, perform the seek immediately.
     if (QThread::currentThread() == m_workerThread) {
@@ -149,9 +159,17 @@ void FFmpegVideoDecoder::setPosition(qint64 positionMs)
         return;
     }
 
+    // If paused, apply seek immediately to reflect the new position before any future play()
+    if (m_workerThread && m_workerThread->isRunning() && playbackState() == PlaybackState::Paused) {
+        QMetaObject::invokeMethod(this, [this, positionMs]() {
+            m_minPositionAfterSeek.store(positionMs);
+            seekToPosition(positionMs);
+        }, Qt::QueuedConnection);
+        return;
+    }
+
     // Otherwise, schedule a coalesced seek in the worker thread to avoid
-    // overloading decoding when the UI scrubs rapidly. The timer is short
-    // so single clicks still happen quickly but continuous dragging is coalesced.
+    // overloading decoding when the UI scrubs rapidly during playback.
     if (m_seekCoalesceTimer) {
         // Queue starting the timer in the worker thread
         QMetaObject::invokeMethod(this, [this]() {
@@ -511,6 +529,11 @@ void FFmpegVideoDecoder::processFrame()
     qint64 wallElapsed = currentTime - m_playbackStartSystemMs;
     double rate = static_cast<double>(m_playbackRate.load());
     qint64 desiredVideoMs = m_playbackStartVideoMs + static_cast<qint64>(wallElapsed * rate);
+    // Enforce post-seek minimum position to avoid brief regressions
+    qint64 guard = m_minPositionAfterSeek.load();
+    if (guard >= 0 && desiredVideoMs < guard) {
+        desiredVideoMs = guard;
+    }
 
     // Prevent tight loops when paused or waiting
     if (desiredVideoMs <= m_position.load()) {
@@ -552,9 +575,18 @@ void FFmpegVideoDecoder::processFrame()
                 QImage image = convertFrameToQImage(m_frame);
                 if (!image.isNull()) {
                     qint64 timestamp = getFrameTimestampMs(m_frame);
+                    // Apply guard: do not regress below the requested seek point
+                    qint64 guardTs = m_minPositionAfterSeek.load();
+                    if (guardTs >= 0 && timestamp < guardTs) {
+                        timestamp = guardTs;
+                    }
                     m_position.store(timestamp);
                     emit frameReady(image, timestamp);
                     emit positionChanged(timestamp);
+                    // Clear guard once satisfied
+                    if (guardTs >= 0 && timestamp >= guardTs) {
+                        m_minPositionAfterSeek.store(-1);
+                    }
                     posterEmitted = true;
                 }
             }
@@ -600,13 +632,27 @@ void FFmpegVideoDecoder::processFrame()
         while (avcodec_receive_frame(m_codecContext, m_frame) == 0) {
             qint64 timestamp = getFrameTimestampMs(m_frame);
             qDebug() << "Decoded frame ts:" << timestamp << "desired:" << desiredVideoMs;
+            // Enforce guard: skip frames that regress below seek target
+            qint64 guardTs = m_minPositionAfterSeek.load();
+            if (guardTs >= 0 && timestamp < guardTs) {
+                // Drop this frame and continue decoding until we reach guard
+                continue;
+            }
             // If this frame is in the future, present it and stop decoding further
             if (timestamp >= desiredVideoMs) {
                 QImage image = convertFrameToQImage(m_frame);
                     if (!image.isNull()) {
+                        // Clamp emitted timestamp to guard if necessary
+                        if (guardTs >= 0 && timestamp < guardTs) {
+                            timestamp = guardTs;
+                        }
                         m_position.store(timestamp);
                         emit frameReady(image, timestamp);
                         emit positionChanged(timestamp);
+                        // Guard satisfied, clear it
+                        if (guardTs >= 0 && timestamp >= guardTs) {
+                            m_minPositionAfterSeek.store(-1);
+                        }
                         emitted = true;
                     }
                 break; // stop inner receive loop and break to outer
@@ -676,16 +722,31 @@ QImage FFmpegVideoDecoder::convertFrameToQImage(AVFrame* frame)
 
 qint64 FFmpegVideoDecoder::getFrameTimestampMs(AVFrame* frame)
 {
-    if (!frame || m_videoStreamIndex < 0) {
-        return 0;
+    if (!frame || m_videoStreamIndex < 0 || !m_formatContext) {
+        return m_position.load();
     }
-    
+
     AVStream* videoStream = m_formatContext->streams[m_videoStreamIndex];
-    if (frame->pts != AV_NOPTS_VALUE) {
-        return av_rescale_q(frame->pts, videoStream->time_base, AV_TIME_BASE_Q) / 1000;
+    int64_t ts = AV_NOPTS_VALUE;
+#if LIBAVUTIL_VERSION_MAJOR >= 54
+    // Prefer best_effort_timestamp when available (handles B-frames/reordered frames)
+    if (frame->best_effort_timestamp != AV_NOPTS_VALUE) {
+        ts = frame->best_effort_timestamp;
     }
-    
-    return 0;
+#endif
+    if (ts == AV_NOPTS_VALUE && frame->pts != AV_NOPTS_VALUE) {
+        ts = frame->pts;
+    }
+    if (ts != AV_NOPTS_VALUE) {
+        return av_rescale_q(ts, videoStream->time_base, AV_TIME_BASE_Q) / 1000;
+    }
+
+    // Fallback: estimate based on last known position and frame interval
+    qint64 last = m_position.load();
+    if (m_frameInterval > 0) {
+        return last + m_frameInterval;
+    }
+    return last;
 }
 
 void FFmpegVideoDecoder::updatePlaybackState(PlaybackState newState)
