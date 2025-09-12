@@ -90,9 +90,21 @@ void FFmpegVideoDecoder::play()
     m_requestedState = PlaybackState::Playing;
     
     if (QThread::currentThread() == m_workerThread) {
+        // If we're already at the end (position == duration), restart from 0
+        qint64 dur = m_duration.load();
+        qint64 pos = m_position.load();
+        if (dur > 0 && pos >= dur) {
+            seekToPosition(0);
+        }
         updatePlaybackState(PlaybackState::Playing);
     } else {
         QMetaObject::invokeMethod(this, [this]() {
+            // If we're already at the end (position == duration), restart from 0
+            qint64 dur = m_duration.load();
+            qint64 pos = m_position.load();
+            if (dur > 0 && pos >= dur) {
+                seekToPosition(0);
+            }
             updatePlaybackState(PlaybackState::Playing);
         }, Qt::QueuedConnection);
     }
